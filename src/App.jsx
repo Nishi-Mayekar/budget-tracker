@@ -12,7 +12,11 @@
  * ✅ GDPR Art.5(1)(c) · CCPA "no sale" · India DPDP Act 2023 purpose-limitation
  */
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { registerPlugin } from "@capacitor/core";
+
+// Native SMS plugin — reads Android SMS inbox via SmsPlugin.java
+const SmsNative = registerPlugin("Sms");
 import {
   BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList
@@ -60,8 +64,10 @@ const BLOCKED_PATTERNS = [
 
 function isTransactionMessage(raw) {
   if (!raw || typeof raw !== "string") return false;
-  if (!(/₹[\s\d,]/.test(raw))) return false;
-  if (!(/\b(credited|debited)\b/i.test(raw))) return false;
+  // Accept ₹ OR Rs. amounts (covers bank SMS + credit card SMS)
+  if (!(/(?:₹[\s\d,]|Rs\.?\s*[\d,])/.test(raw))) return false;
+  // Must have a transaction keyword — covers debit/credit bank SMS and credit card SMS
+  if (!(/\b(credited|debited|spent|charged|used\s+for|purchase[d]?|transaction)\b/i.test(raw))) return false;
   return !BLOCKED_PATTERNS.some(p => p.test(raw));
 }
 
@@ -98,13 +104,19 @@ function detectBrand(raw) {
 
 // ── Secure parser ───────────────────────────────────────────────────────
 function secureExtract(raw) {
-  const amtMatch = raw.match(/₹\s*([\d,]+(?:\.\d{1,2})?)/);
+  // Match ₹ or Rs. amounts (credit card SMS often use Rs.)
+  const amtMatch = raw.match(/(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)/i);
   if (!amtMatch) return null;
   const amount = Math.round(parseFloat(amtMatch[1].replace(/,/g, "")) * 100) / 100;
   if (!isFinite(amount) || amount <= 0) return null;
 
-  const type   = /\bcredited\b/i.test(raw) ? "credited" : "debited";
-  const brand  = detectBrand(raw);  // null if no known brand found
+  // credited = money coming in; everything else (debited/spent/charged/used/transaction) = going out
+  const type = /\bcredited\b/i.test(raw) ? "credited" : "debited";
+
+  // Detect if this is a credit card transaction
+  const isCreditCard = /credit\s*(card|a\/c|ac)/i.test(raw);
+
+  const brand = detectBrand(raw);  // null if no known brand found
 
   // Category logic:
   //   credited           → income
@@ -117,7 +129,7 @@ function secureExtract(raw) {
   else if (amount > 2000)       category = "uho";
   else                          category = "miscellaneous";
 
-  return { amount, type, category, brand };
+  return { amount, type, category, brand, isCreditCard };
 }
 
 function processSMS(sms) {
@@ -153,6 +165,12 @@ const MOCK_SMS_FEED = [
   { id: 18, raw: "₹500 debited from Ac xx5678. Info: Jio Recharge",                 date: "Apr 07", bank: "SBI"   },
   { id: 19, raw: "₹350 debited from Ac xx5678. Info: HP Petrol Fill-up",            date: "Apr 09", bank: "SBI"   },
   { id: 20, raw: "₹200 debited from Ac xx5678. Info: Starbucks Coffee",             date: "Apr 11", bank: "SBI"   },
+  // Credit Card transactions
+  { id: 21, raw: "Rs.3,500.00 debited from your HDFC Credit Card ending 1234 at IndiGo. Apr 08",   date: "Apr 08", bank: "HDFC"  },
+  { id: 22, raw: "₹850 spent on SBI Credit Card XX5678 at Swiggy on 12-Apr-26",                    date: "Apr 12", bank: "SBI"   },
+  { id: 23, raw: "Alert: Transaction of ₹1,200 on your Axis Bank Credit Card ending 9012 at Amazon", date: "Apr 11", bank: "Axis"  },
+  { id: 24, raw: "Rs.450.00 charged on ICICI Bank Credit Card XX3456 at Zomato. Apr 10",            date: "Apr 10", bank: "ICICI" },
+  { id: 25, raw: "Your Kotak Credit Card has been used for Rs.6,200 at Apple Store. Apr 09",        date: "Apr 09", bank: "Kotak" },
   // BLOCKED — OTP messages (prove filter works)
   { id: 101, raw: "748392 is your OTP for HDFC NetBanking. Do not share with anyone.", date: "Apr 14", bank: "HDFC"  },
   { id: 102, raw: "Your ICICI Bank OTP is 291047. Valid for 10 minutes.",              date: "Apr 13", bank: "ICICI" },
@@ -217,17 +235,36 @@ export default function App() {
   const [qcChartMode,    setQcChartMode]    = useState("bar");  // QuickCart: "pie" | "bar"
   const [newGlobalTag,   setNewGlobalTag]   = useState("");
   const [filters,        setFilters]        = useState({ type: "all", category: "all" });
+  const [smsFeed,        setSmsFeed]        = useState(MOCK_SMS_FEED);
+  const [smsLoading,     setSmsLoading]     = useState(true);
+
+  // ── Load real SMS on mount (falls back to mock data in browser/dev) ───
+  useEffect(() => {
+    SmsNative.getMessages()
+      .then(({ messages }) => {
+        const feed = messages.map((m, i) => ({
+          id:   i,
+          raw:  m.body,
+          date: new Date(Number(m.date)).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }),
+          bank: m.address,
+        }));
+        // Only replace if we actually got messages
+        if (feed.length > 0) setSmsFeed(feed);
+      })
+      .catch(() => { /* keep mock data — running in browser or permission denied */ })
+      .finally(() => setSmsLoading(false));
+  }, []);
 
   // ── Security pipeline ─────────────────────────────────────────────────
   const { txns, blockedCount } = useMemo(() => {
     let blocked = 0;
-    const passed = MOCK_SMS_FEED.reduce((acc, sms) => {
+    const passed = smsFeed.reduce((acc, sms) => {
       const r = processSMS(sms);
       if (r) acc.push(r); else blocked++;
       return acc;
     }, []);
     return { txns: passed, blockedCount: blocked };
-  }, []);
+  }, [smsFeed]);
 
   const taggedTxns = useMemo(
     () => txns.map(t => ({ ...t, tag: tagMap[t.id] || null })),
