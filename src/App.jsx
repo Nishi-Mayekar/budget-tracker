@@ -102,6 +102,65 @@ function detectBrand(raw) {
   return match ? match[0] : null;
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+//  UPI NARRATION AUTO-TAGGER
+//  Reads ONLY the narration/remarks field of UPI SMS (the note you type in
+//  GPay / PhonePe). Raw text is NEVER stored — only the matched tag label.
+//  e.g. "grocery" → tag:"Groceries", "travel" → tag:"Travel"
+// ══════════════════════════════════════════════════════════════════════════
+
+// Keyword → tag mapping (only predefined labels are ever stored)
+const NARRATION_TAG_MAP = [
+  { tag: "Groceries",     keywords: ["grocery","groceries","kirana","sabzi","vegetable","fruit","provision","supermarket","dmart","reliance fresh","more store"] },
+  { tag: "Food",          keywords: ["food","restaurant","cafe","dining","lunch","dinner","breakfast","meal","snack","coffee","tea","juice","bakery","hotel food"] },
+  { tag: "Travel",        keywords: ["travel","flight","hotel","train","bus","cab","taxi","trip","tour","holiday","vacation","airport","railway","irctc","booking"] },
+  { tag: "Medical",       keywords: ["medical","medicine","hospital","doctor","pharmacy","health","chemist","clinic","diagnostic","lab","apollo","medplus"] },
+  { tag: "Transport",     keywords: ["fuel","petrol","diesel","metro","auto","rickshaw","parking","toll","fastag","cng","hp pump","iocl"] },
+  { tag: "Entertainment", keywords: ["entertainment","movie","theatre","cinema","concert","show","sport","game","pvr","inox","bookmyshow"] },
+  { tag: "Shopping",      keywords: ["shopping","clothes","fashion","apparel","cloth","saree","shirt","shoes","bag","accessory"] },
+  { tag: "Utilities",     keywords: ["electricity","water","gas","bill","recharge","internet","broadband","wifi","dth","postpaid","prepaid","utility"] },
+  { tag: "Rent",          keywords: ["rent","maintenance","society","housing","landlord","flat","deposit","lease"] },
+  { tag: "Education",     keywords: ["school","college","fees","education","course","tuition","book","stationery","library","exam"] },
+  { tag: "Self Care",     keywords: ["salon","spa","haircut","gym","fitness","yoga","wellness","beauty","parlour","massage"] },
+  { tag: "Savings",       keywords: ["savings","investment","fd","rd","mutual fund","sip","ppf","insurance","premium","lic"] },
+];
+
+// Extract the narration/note from UPI bank SMS — only the narration segment
+// Patterns cover HDFC, SBI, ICICI, Axis, Kotak, Yes Bank, IndusInd UPI formats
+function extractUpiNarration(raw) {
+  const patterns = [
+    // HDFC:  Info: UPI/refno/NARRATION/vpa@bank
+    /\bInfo:\s*UPI[\/\-]\d+[\/\-]([^\/\-,@\n]{2,30})[\/\-]/i,
+    // Axis / generic: UPI/refno/vpa@bank/NARRATION
+    /UPI[\/\-]\d+[\/\-][^\/]+@[^\/]+[\/\-]([^\/,\.\n]{2,30})/i,
+    // Remarks / Note field (SBI, ICICI variants)
+    /\bRemarks?:\s*([^\.\n,]{2,30})/i,
+    /\bNote:\s*([^\.\n,]{2,30})/i,
+    // PhonePe / PayTM narration after "for"
+    /\bpaid\s+(?:for|via)\s+([a-z][a-z\s]{1,25})/i,
+  ];
+  for (const p of patterns) {
+    const m = raw.match(p);
+    if (m) {
+      const narration = m[1].trim().toLowerCase();
+      // Reject if narration looks like a VPA, reference number, or is too generic
+      if (/[@\d]{4,}/.test(narration)) continue;
+      if (narration.length < 3)        continue;
+      return narration;
+    }
+  }
+  return null;
+}
+
+function narrationToTag(raw) {
+  const narration = extractUpiNarration(raw);
+  if (!narration) return null;
+  for (const { tag, keywords } of NARRATION_TAG_MAP) {
+    if (keywords.some(k => narration.includes(k))) return tag;
+  }
+  return null;
+}
+
 // ── Secure parser ───────────────────────────────────────────────────────
 function secureExtract(raw) {
   // Match ₹ or Rs. amounts (credit card SMS often use Rs.)
@@ -132,11 +191,34 @@ function secureExtract(raw) {
   return { amount, type, category, brand, isCreditCard };
 }
 
+const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
 function processSMS(sms) {
   if (!isTransactionMessage(sms.raw)) return null;
   const parsed = secureExtract(sms.raw);
   if (!parsed) return null;
-  return { id: sms.id, date: sms.date, bank: sms.bank, ...parsed, tag: null };
+
+  // Derive month/year for period filtering
+  let monthKey, year;
+  if (sms.timestamp) {
+    const d = new Date(sms.timestamp);
+    year     = d.getFullYear();
+    monthKey = `${year}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  } else {
+    // Parse from date string like "Apr 08" — assume current year
+    const now  = new Date();
+    year       = now.getFullYear();
+    const parts = (sms.date || "").split(" ");
+    const mIdx  = MONTH_NAMES.indexOf(parts[0]);
+    const month = mIdx >= 0 ? mIdx + 1 : now.getMonth() + 1;
+    monthKey   = `${year}-${String(month).padStart(2, "0")}`;
+  }
+
+  // Auto-tag from UPI narration (the note you type in GPay / PhonePe)
+  // Raw narration text is never stored — only the matched label (e.g. "Grocery")
+  const suggestedTag = parsed.type === "debited" ? narrationToTag(sms.raw) : null;
+
+  return { id: sms.id, date: sms.date, bank: sms.bank, monthKey, year, ...parsed, suggestedTag, tag: null };
 }
 
 // ─── Mock SMS feed ──────────────────────────────────────────────────────
@@ -165,6 +247,12 @@ const MOCK_SMS_FEED = [
   { id: 18, raw: "₹500 debited from Ac xx5678. Info: Jio Recharge",                 date: "Apr 07", bank: "SBI"   },
   { id: 19, raw: "₹350 debited from Ac xx5678. Info: HP Petrol Fill-up",            date: "Apr 09", bank: "SBI"   },
   { id: 20, raw: "₹200 debited from Ac xx5678. Info: Starbucks Coffee",             date: "Apr 11", bank: "SBI"   },
+  // UPI with narration — auto-tag from GPay note
+  { id: 31, raw: "₹650 debited from Ac xx5678. Info: UPI/987654321/grocery/merchant@okicici. Avl Bal:₹8,200", date: "Apr 13", bank: "HDFC" },
+  { id: 32, raw: "₹4,200 debited from Ac xx5678. Info: UPI/876543219/travel/irctc@okaxis. Avl Bal:₹4,000",    date: "Apr 08", bank: "HDFC" },
+  { id: 33, raw: "₹800 debited from Ac xx5678. Info: UPI/765432198/medical/apollo@okicici. Avl Bal:₹3,200",   date: "Apr 10", bank: "SBI"  },
+  { id: 34, raw: "₹1,100 debited from Ac xx5678 Remarks: rent payment Apr. UPI Ref:654321987",                date: "Apr 01", bank: "ICICI"},
+  { id: 35, raw: "₹350 debited from Ac xx5678. Info: UPI/543219876/fuel/hpcl@okaxis. Avl Bal:₹2,850",        date: "Apr 11", bank: "HDFC" },
   // Credit Card transactions
   { id: 21, raw: "Rs.3,500.00 debited from your HDFC Credit Card ending 1234 at IndiGo. Apr 08",   date: "Apr 08", bank: "HDFC"  },
   { id: 22, raw: "₹850 spent on SBI Credit Card XX5678 at Swiggy on 12-Apr-26",                    date: "Apr 12", bank: "SBI"   },
@@ -255,6 +343,21 @@ export default function App() {
       .finally(() => setSmsLoading(false));
   }, []);
 
+  // ── Period state (monthly / yearly) ──────────────────────────────────
+  const NOW          = new Date();
+  const [period,     setPeriod]     = useState("monthly");   // "monthly" | "yearly"
+  const [viewMonth,  setViewMonth]  = useState(NOW.getMonth() + 1); // 1-12
+  const [viewYear,   setViewYear]   = useState(NOW.getFullYear());
+
+  const shiftMonth = (dir) => {
+    setViewMonth(m => {
+      let nm = m + dir;
+      if (nm < 1)  { setViewYear(y => y - 1); return 12; }
+      if (nm > 12) { setViewYear(y => y + 1); return 1;  }
+      return nm;
+    });
+  };
+
   // ── Security pipeline ─────────────────────────────────────────────────
   const { txns, blockedCount } = useMemo(() => {
     let blocked = 0;
@@ -267,16 +370,24 @@ export default function App() {
   }, [smsFeed]);
 
   const taggedTxns = useMemo(
-    () => txns.map(t => ({ ...t, tag: tagMap[t.id] || null })),
+    // Manual tag wins; fall back to GPay narration auto-tag; then null
+    () => txns.map(t => ({ ...t, tag: tagMap[t.id] || t.suggestedTag || null })),
     [txns, tagMap]
   );
 
-  // ── Aggregates ────────────────────────────────────────────────────────
-  const totalCredited  = useMemo(() => taggedTxns.filter(t => t.type === "credited").reduce((s, t) => s + t.amount, 0), [taggedTxns]);
-  const totalDebited   = useMemo(() => taggedTxns.filter(t => t.type === "debited").reduce((s, t) => s + t.amount, 0), [taggedTxns]);
-  const totalUHO       = useMemo(() => taggedTxns.filter(t => t.category === "uho").reduce((s, t) => s + t.amount, 0), [taggedTxns]);
-  const totalMisc      = useMemo(() => taggedTxns.filter(t => t.category === "miscellaneous").reduce((s, t) => s + t.amount, 0), [taggedTxns]);
-  const totalQuickCart = useMemo(() => taggedTxns.filter(t => t.category === "quickcart").reduce((s, t) => s + t.amount, 0), [taggedTxns]);
+  // ── Period filter ─────────────────────────────────────────────────────
+  const periodTxns = useMemo(() => {
+    if (period === "yearly") return taggedTxns.filter(t => t.year === viewYear);
+    const key = `${viewYear}-${String(viewMonth).padStart(2, "0")}`;
+    return taggedTxns.filter(t => t.monthKey === key);
+  }, [taggedTxns, period, viewYear, viewMonth]);
+
+  // ── Aggregates (period-scoped) ────────────────────────────────────────
+  const totalCredited  = useMemo(() => periodTxns.filter(t => t.type === "credited").reduce((s, t) => s + t.amount, 0), [periodTxns]);
+  const totalDebited   = useMemo(() => periodTxns.filter(t => t.type === "debited").reduce((s, t) => s + t.amount, 0), [periodTxns]);
+  const totalUHO       = useMemo(() => periodTxns.filter(t => t.category === "uho").reduce((s, t) => s + t.amount, 0), [periodTxns]);
+  const totalMisc      = useMemo(() => periodTxns.filter(t => t.category === "miscellaneous").reduce((s, t) => s + t.amount, 0), [periodTxns]);
+  const totalQuickCart = useMemo(() => periodTxns.filter(t => t.category === "quickcart").reduce((s, t) => s + t.amount, 0), [periodTxns]);
 
   // ── Chart data ────────────────────────────────────────────────────────
   const barData = [
@@ -294,7 +405,7 @@ export default function App() {
   // Brand chart — QuickCart brands breakdown
   const brandChartData = useMemo(() => {
     const map = {};
-    taggedTxns.filter(t => t.category === "quickcart" && t.brand).forEach(t => {
+    periodTxns.filter(t => t.category === "quickcart" && t.brand).forEach(t => {
       const b = t.brand.charAt(0).toUpperCase() + t.brand.slice(1).toLowerCase()
         .replace(/\b\w/g, c => c.toUpperCase());
       map[b] = (map[b] || 0) + t.amount;
@@ -307,7 +418,7 @@ export default function App() {
   // Tag chart — spending per tag
   const tagChartData = useMemo(() => {
     const map = {};
-    taggedTxns.filter(t => t.tag).forEach(t => {
+    periodTxns.filter(t => t.tag).forEach(t => {
       map[t.tag] = (map[t.tag] || 0) + t.amount;
     });
     return Object.entries(map)
@@ -315,8 +426,8 @@ export default function App() {
       .sort((a, b) => b.amt - a.amt);
   }, [taggedTxns]);
 
-  // Filtered txns for Overview
-  const filteredTxns = useMemo(() => taggedTxns.filter(t => {
+  // Filtered txns for Overview (period-scoped)
+  const filteredTxns = useMemo(() => periodTxns.filter(t => {
     if (filters.type !== "all"     && t.type     !== filters.type)     return false;
     if (filters.category !== "all" && t.category !== filters.category) return false;
     return true;
@@ -420,8 +531,30 @@ export default function App() {
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
         <div>
-          <p style={{ color: T_MUTED, fontSize: 11, letterSpacing: 1, textTransform: "uppercase", margin: "0 0 3px" }}>April 2026</p>
-          <h1 style={{ color: T_BRIGHT, fontSize: 22, fontWeight: 800, margin: 0 }}>Budget Tracker</h1>
+          <h1 style={{ color: T_BRIGHT, fontSize: 22, fontWeight: 800, margin: "0 0 8px" }}>Budget Tracker</h1>
+          {/* Period toggle */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={() => setPeriod("monthly")}
+              style={{ ...chip(period === "monthly", "#6366f1"), fontSize: 12 }}>Monthly</button>
+            <button onClick={() => setPeriod("yearly")}
+              style={{ ...chip(period === "yearly", "#6366f1"), fontSize: 12 }}>Yearly</button>
+          </div>
+          {/* Month / Year navigator */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+            <button onClick={() => period === "monthly" ? shiftMonth(-1) : setViewYear(y => y - 1)}
+              style={{ background: PAGE_BG, border: `1px solid ${BORDER}`, borderRadius: 8,
+                color: T_DIM, fontSize: 14, width: 28, height: 28, cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center" }}>‹</button>
+            <span style={{ color: T_BRIGHT, fontSize: 13, fontWeight: 700, minWidth: 90, textAlign: "center" }}>
+              {period === "monthly"
+                ? `${MONTH_NAMES[viewMonth - 1]} ${viewYear}`
+                : `${viewYear}`}
+            </span>
+            <button onClick={() => period === "monthly" ? shiftMonth(1) : setViewYear(y => y + 1)}
+              style={{ background: PAGE_BG, border: `1px solid ${BORDER}`, borderRadius: 8,
+                color: T_DIM, fontSize: 14, width: 28, height: 28, cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center" }}>›</button>
+          </div>
           <p style={{ color: T_MUTED, fontSize: 11, margin: "4px 0 0" }}>{taggedTxns.length} transactions parsed</p>
         </div>
         <button onClick={() => setShowTagMgr(true)}
