@@ -1,0 +1,8 @@
+{
+	"appId": "com.budgettracker.sms",
+	"appName": "Budget Tracker",
+	"webDir": "dist",
+	"android": {
+		"minWebViewVersion": 60
+	}
+}
