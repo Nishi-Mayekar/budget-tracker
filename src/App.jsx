@@ -714,11 +714,11 @@ export default function App() {
     const daysElapsed  = period==="M" && viewMonth===NOW.getMonth()+1 && viewYear===NOW.getFullYear()
       ? NOW.getDate() : daysInMonth;
 
+    // CC excluded — it's a payment transfer, not real spending
     const catRows = [
-      { key:"cc",    internal:"creditcard",    total:totalCC    },
-      { key:"quick", internal:"quickcart",     total:totalQuick },
-      { key:"invest",internal:"investments",   total:totalInv   },
       { key:"misc",  internal:"miscellaneous", total:totalMisc  },
+      { key:"invest",internal:"investments",   total:totalInv   },
+      { key:"quick", internal:"quickcart",     total:totalQuick },
     ].filter(c => c.total > 0);
 
     const nextPayday = () => {
@@ -865,8 +865,10 @@ export default function App() {
             </div>
           )}
 
-          {/* Where it went */}
-          {totalDebited > 0 && catRows.length > 0 && (
+          {/* Where it went — CC excluded */}
+          {catRows.length > 0 && (() => {
+            const nonCCTotal = catRows.reduce((s,r) => s+r.total, 0);
+            return (
             <div style={{ background:D.white, borderRadius:D.rLg, border:`1px solid ${D.line}`,
               boxShadow:D.card, marginBottom:14, overflow:"hidden" }}>
               <div style={{ padding:"18px 20px 12px", borderBottom:`1px solid ${D.line}` }}>
@@ -874,13 +876,13 @@ export default function App() {
                   Where it went
                 </div>
                 <div style={{ fontSize:14, color:D.ink, fontWeight:600, marginTop:2 }}>
-                  {fmt(totalDebited,true)} across {catRows.length} {catRows.length===1?"category":"categories"}
+                  {fmt(nonCCTotal,true)} across {catRows.length} {catRows.length===1?"category":"categories"}
                 </div>
               </div>
 
               {catRows.map((row, idx) => {
                 const c = CATS[row.key];
-                const pct = totalDebited > 0 ? Math.round((row.total/totalDebited)*100) : 0;
+                const pct = nonCCTotal > 0 ? Math.round((row.total/nonCCTotal)*100) : 0;
                 const count = periodTxns.filter(t => t.category===row.internal).length;
                 const isLast = idx === catRows.length-1;
                 return (
@@ -910,7 +912,8 @@ export default function App() {
                 );
               })}
             </div>
-          )}
+            );
+          })()}
 
           {/* Empty state */}
           {periodTxns.filter(t=>t.type==="debited").length === 0 && periodTxns.length === 0 && (
@@ -1342,7 +1345,7 @@ export default function App() {
   //  ROOT RENDER
   // ══════════════════════════════════════════════════════════════════════
   return (
-    <div style={{ maxWidth:430, margin:"0 auto", height:"100vh",
+    <div style={{ width:"100%", maxWidth:"100vw", height:"100vh",
       background:D.cream, display:"flex", flexDirection:"column",
       overflow:"hidden", position:"relative", ...F }}>
 
