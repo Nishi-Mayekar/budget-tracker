@@ -29,6 +29,8 @@ const UHO_COLOR    = "#f59e0b";
 const MISC_COLOR   = "#818cf8";
 const DEBIT_COLOR  = "#ef4444";
 const QC_COLOR     = "#f43f5e";   // QuickCart — rose/pink
+const CC_COLOR     = "#a78bfa";   // Credit Card — violet
+const INV_COLOR    = "#06b6d4";   // Investments — cyan
 const SAFE_COLOR   = "#22d3ee";
 const CARD_BG      = "#1e293b";
 const PAGE_BG      = "#0f172a";
@@ -90,6 +92,21 @@ const QUICKCART_BRANDS = [
   // Other
   "Swiggy Instamart", "ONDC",
 ];
+
+// ── Investment brand allowlist ───────────────────────────────────────────
+const INVESTMENT_BRANDS = [
+  "Groww", "Zerodha", "Kuvera", "ET Money", "INDmoney", "Angel One",
+  "AngelOne", "Paytm Money", "PaytmMoney", "Upstox", "ICICI Direct",
+  "HDFC Securities", "Kotak Securities", "SBI Securities", "Motilal Oswal",
+];
+const INV_REGEX = new RegExp(
+  INVESTMENT_BRANDS.map(b => `\\b${b.replace(/[-\s]/g, "[\\s-]?")}\\b`).join("|"),
+  "i"
+);
+function detectInvestmentBrand(raw) {
+  const m = raw.match(INV_REGEX);
+  return m ? m[0] : null;
+}
 
 /** Builds one combined regex for all brands (case-insensitive word-boundary match) */
 const BRAND_REGEX = new RegExp(
@@ -176,22 +193,27 @@ function secureExtract(raw) {
   const isRefundTxn = isRefund && !isCredit; // flag for display
 
   // Detect if this is a credit card transaction
-  const isCreditCard = /credit\s*(card|a\/c|ac)/i.test(raw);
+  const isCreditCard = /credit[\s\-]?card|cc\s+(ending|no|limit|card)|credit\s*a\/c/i.test(raw);
 
-  const brand = detectBrand(raw);  // null if no known brand found
+  const brand       = detectBrand(raw);           // null if no known QC brand
+  const invBrand    = detectInvestmentBrand(raw); // null if no investment brand
 
   // Category logic:
-  //   credited           → income
-  //   known QC brand     → quickcart  (regardless of amount)
-  //   debit > 2000       → uho
-  //   debit ≤ 2000       → miscellaneous
+  //   credited              → income
+  //   credit card debit     → creditcard   (own category, regardless of amount/brand)
+  //   investment platform   → investments  (Groww, Zerodha, etc.)
+  //   known QC brand        → quickcart    (regardless of amount)
+  //   debit > 2000          → uho
+  //   debit ≤ 2000          → miscellaneous
   let category;
   if      (type === "credited") category = "income";
+  else if (isCreditCard)        category = "creditcard";
+  else if (invBrand)            category = "investments";
   else if (brand)               category = "quickcart";
   else if (amount > 2000)       category = "uho";
   else                          category = "miscellaneous";
 
-  return { amount, type, category, brand, isCreditCard, isRefund: isRefundTxn };
+  return { amount, type, category, brand: brand || invBrand, isCreditCard, isRefund: isRefundTxn };
 }
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -262,6 +284,11 @@ const MOCK_SMS_FEED = [
   { id: 23, raw: "Alert: Transaction of ₹1,200 on your Axis Bank Credit Card ending 9012 at Amazon", date: "Apr 11", bank: "Axis"  },
   { id: 24, raw: "Rs.450.00 charged on ICICI Bank Credit Card XX3456 at Zomato. Apr 10",            date: "Apr 10", bank: "ICICI" },
   { id: 25, raw: "Your Kotak Credit Card has been used for Rs.6,200 at Apple Store. Apr 09",        date: "Apr 09", bank: "Kotak" },
+  // Investments — Groww, Zerodha, SIP
+  { id: 41, raw: "₹5,000 debited from Ac xx5678. Info: Groww Mutual Fund SIP Apr",        date: "Apr 03", bank: "HDFC"  },
+  { id: 42, raw: "₹2,500 debited from Ac xx5678. Info: Zerodha Broking Charges",          date: "Apr 07", bank: "ICICI" },
+  { id: 43, raw: "₹10,000 debited from Ac xx5678. Info: Groww - Nifty 50 Index Fund SIP", date: "Apr 01", bank: "SBI"   },
+  { id: 44, raw: "₹3,000 debited from Ac xx5678. Info: INDmoney US Stock Purchase",       date: "Apr 10", bank: "HDFC"  },
   // BLOCKED — OTP messages (prove filter works)
   { id: 101, raw: "748392 is your OTP for HDFC NetBanking. Do not share with anyone.", date: "Apr 14", bank: "HDFC"  },
   { id: 102, raw: "Your ICICI Bank OTP is 291047. Valid for 10 minutes.",              date: "Apr 13", bank: "ICICI" },
@@ -274,7 +301,8 @@ const MOCK_SMS_FEED = [
 const fmt = n => `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 
 const catLabel = c => ({
-  income: "Income", uho: "UHO", miscellaneous: "Misc", quickcart: "QuickCart"
+  income: "Income", uho: "UHO", miscellaneous: "Misc",
+  quickcart: "QuickCart", creditcard: "CC", investments: "Invest",
 }[c] || c);
 
 const catStyle = c => ({
@@ -282,10 +310,13 @@ const catStyle = c => ({
   uho:           { color: UHO_COLOR,    background: "rgba(245,158,11,.15)"  },
   miscellaneous: { color: MISC_COLOR,   background: "rgba(129,140,248,.15)" },
   quickcart:     { color: QC_COLOR,     background: "rgba(244,63,94,.15)"   },
+  creditcard:    { color: CC_COLOR,     background: "rgba(167,139,250,.15)" },
+  investments:   { color: INV_COLOR,    background: "rgba(6,182,212,.15)"   },
 }[c]);
 
 const CAT_COLORS = {
-  income: INCOME_COLOR, uho: UHO_COLOR, miscellaneous: MISC_COLOR, quickcart: QC_COLOR
+  income: INCOME_COLOR, uho: UHO_COLOR, miscellaneous: MISC_COLOR,
+  quickcart: QC_COLOR,  creditcard: CC_COLOR, investments: INV_COLOR,
 };
 
 const CustomTooltip = ({ active, payload, label }) => {
@@ -351,13 +382,13 @@ export default function App() {
       .finally(() => setSmsLoading(false));
   }, []);
 
-  // ── Period state (monthly / yearly) ──────────────────────────────────
-  const NOW          = new Date();
-  const [period,     setPeriod]     = useState("monthly");   // "monthly" | "yearly"
-  const [viewMonth,  setViewMonth]  = useState(NOW.getMonth() + 1); // 1-12
-  const [viewYear,   setViewYear]   = useState(NOW.getFullYear());
+  // ── Period state ─────────────────────────────────────────────────────
+  const NOW = new Date();
+  const [period,    setPeriod]    = useState("M"); // "W"|"M"|"3M"|"6M"|"1Y"|"ALL"
+  const [viewMonth, setViewMonth] = useState(NOW.getMonth() + 1);
+  const [viewYear,  setViewYear]  = useState(NOW.getFullYear());
 
-  const [selectedCat, setSelectedCat] = useState(null); // null|"uho"|"quickcart"|"miscellaneous"
+  const [selectedCat, setSelectedCat] = useState(null);
   const toggleCat = cat => setSelectedCat(p => p === cat ? null : cat);
 
   const shiftMonth = (dir) => {
@@ -388,9 +419,15 @@ export default function App() {
 
   // ── Period filter ─────────────────────────────────────────────────────
   const periodTxns = useMemo(() => {
-    if (period === "yearly") return taggedTxns.filter(t => t.year === viewYear);
-    const key = `${viewYear}-${String(viewMonth).padStart(2, "0")}`;
-    return taggedTxns.filter(t => t.monthKey === key);
+    const mk = (y, m) => `${y}-${String(m).padStart(2, "0")}`;
+    if (period === "ALL") return taggedTxns;
+    if (period === "M")   return taggedTxns.filter(t => t.monthKey === mk(viewYear, viewMonth));
+    if (period === "1Y")  return taggedTxns.filter(t => t.year === NOW.getFullYear());
+    // W / 3M / 6M — cut off by monthKey
+    const monthsBack = period === "W" ? 0 : period === "3M" ? 3 : 6;
+    const d = new Date(NOW.getFullYear(), NOW.getMonth() - monthsBack, 1);
+    const cutoff = mk(d.getFullYear(), d.getMonth() + 1);
+    return taggedTxns.filter(t => t.monthKey >= cutoff);
   }, [taggedTxns, period, viewYear, viewMonth]);
 
   // ── Aggregates (period-scoped) ────────────────────────────────────────
@@ -399,6 +436,8 @@ export default function App() {
   const totalUHO       = useMemo(() => periodTxns.filter(t => t.category === "uho").reduce((s, t) => s + t.amount, 0), [periodTxns]);
   const totalMisc      = useMemo(() => periodTxns.filter(t => t.category === "miscellaneous").reduce((s, t) => s + t.amount, 0), [periodTxns]);
   const totalQuickCart = useMemo(() => periodTxns.filter(t => t.category === "quickcart").reduce((s, t) => s + t.amount, 0), [periodTxns]);
+  const totalCC        = useMemo(() => periodTxns.filter(t => t.category === "creditcard").reduce((s, t) => s + t.amount, 0), [periodTxns]);
+  const totalInv       = useMemo(() => periodTxns.filter(t => t.category === "investments").reduce((s, t) => s + t.amount, 0), [periodTxns]);
 
   // ── Chart data ────────────────────────────────────────────────────────
   const barData = [
@@ -421,12 +460,12 @@ export default function App() {
 
   // Yearly insight — top category, top brand, biggest single spend
   const yearlyInsight = useMemo(() => {
-    if (period !== "yearly" || periodTxns.length === 0) return null;
+    if (!["1Y","ALL"].includes(period) || periodTxns.length === 0) return null;
     const debits = periodTxns.filter(t => t.type === "debited");
-    const cats = { uho: 0, quickcart: 0, miscellaneous: 0 };
+    const cats = { uho: 0, quickcart: 0, miscellaneous: 0, creditcard: 0, investments: 0 };
     debits.forEach(t => { if (cats[t.category] !== undefined) cats[t.category] += t.amount; });
     const topCat = Object.entries(cats).sort((a,b) => b[1]-a[1])[0];
-    const topCatLabel = { uho: "UHO (big spends)", quickcart: "QuickCart", miscellaneous: "Misc" }[topCat[0]];
+    const topCatLabel = { uho: "UHO (big spends)", quickcart: "QuickCart", miscellaneous: "Misc", creditcard: "Credit Card", investments: "Investments" }[topCat[0]];
 
     const brandMap = {};
     debits.filter(t => t.brand).forEach(t => { brandMap[t.brand] = (brandMap[t.brand]||0) + t.amount; });
@@ -566,228 +605,280 @@ export default function App() {
   // ══════════════════════════════════════════════════════════════════════
   //  HOME TAB
   // ══════════════════════════════════════════════════════════════════════
-  const HomeTab = () => (
-    <div style={{ overflowY: "auto", flex: 1, padding: "20px 16px 88px" }}>
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
-        <div>
-          <h1 style={{ color: T_BRIGHT, fontSize: 22, fontWeight: 800, margin: "0 0 8px" }}>Budget Tracker</h1>
-          {/* Period toggle */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <button onClick={() => setPeriod("monthly")}
-              style={{ ...chip(period === "monthly", "#6366f1"), fontSize: 12 }}>Monthly</button>
-            <button onClick={() => setPeriod("yearly")}
-              style={{ ...chip(period === "yearly", "#6366f1"), fontSize: 12 }}>Yearly</button>
+  const HomeTab = () => {
+    const totalSpend = totalUHO + totalMisc + totalQuickCart;
+    const uhoP  = totalSpend > 0 ? (totalUHO       / totalSpend * 100) : 0;
+    const qcP   = totalSpend > 0 ? (totalQuickCart / totalSpend * 100) : 0;
+    const miscP = totalSpend > 0 ? (totalMisc      / totalSpend * 100) : 0;
+
+    const PERIODS = ["W","M","3M","6M","1Y","ALL"];
+
+    const periodLabel = period === "M"
+      ? `${MONTH_NAMES[viewMonth - 1]} ${viewYear}`
+      : period === "1Y" || period === "ALL" ? `${viewYear}` : `Last ${period}`;
+
+    // Category icon map
+    const catIcon = { income:"💚", uho:"🏠", quickcart:"🛒", miscellaneous:"🏷️" };
+    const txnColor = t => t.type === "credited"
+      ? INCOME_COLOR
+      : t.category === "uho" ? UHO_COLOR : t.category === "quickcart" ? QC_COLOR : MISC_COLOR;
+
+    return (
+    <div style={{ overflowY: "auto", flex: 1, paddingBottom: 88 }}>
+
+      {/* ── HERO CARD (cream) ─────────────────────────────────────── */}
+      <div style={{ background: "#f5f0e8", borderRadius: "0 0 28px 28px",
+        padding: "52px 20px 24px", marginBottom: 16 }}>
+
+        {/* Top row */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+          <div>
+            <p style={{ color: "#6b6460", fontSize: 11, letterSpacing: 1, textTransform: "uppercase", margin: "0 0 2px" }}>
+              Total Spent · {periodLabel}
+            </p>
+            <h1 style={{ color: "#1a1410", fontSize: 34, fontWeight: 800, margin: 0, letterSpacing: -1 }}>
+              {fmt(totalSpend)}
+            </h1>
+            {totalCredited > 0 && (
+              <p style={{ color: "#3d9a6e", fontSize: 12, margin: "4px 0 0", fontWeight: 600 }}>
+                +{fmt(totalCredited)} income this period
+              </p>
+            )}
           </div>
-          {/* Month / Year navigator */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
-            <button onClick={() => period === "monthly" ? shiftMonth(-1) : setViewYear(y => y - 1)}
-              style={{ background: PAGE_BG, border: `1px solid ${BORDER}`, borderRadius: 8,
-                color: T_DIM, fontSize: 14, width: 28, height: 28, cursor: "pointer",
+          <button onClick={() => setShowTagMgr(true)}
+            style={{ width: 38, height: 38, borderRadius: "50%",
+              background: "rgba(0,0,0,.08)", border: "none", cursor: "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Tag size={15} color="#6b6460" />
+          </button>
+        </div>
+
+        {/* Period selector: W M 3M 6M 1Y ALL */}
+        <div style={{ display: "flex", gap: 4, marginTop: 16 }}>
+          {PERIODS.map(p => (
+            <button key={p} onClick={() => setPeriod(p)}
+              style={{ flex: 1, padding: "6px 2px", borderRadius: 20, border: "none",
+                cursor: "pointer", fontSize: 11, fontWeight: 700, transition: "all .15s",
+                background: period === p ? "#1a1410" : "rgba(0,0,0,.06)",
+                color:      period === p ? "#f5f0e8" : "#6b6460" }}>
+              {p}
+            </button>
+          ))}
+        </div>
+
+        {/* Month nav — only shown for M period */}
+        {period === "M" && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 14 }}>
+            <button onClick={() => shiftMonth(-1)}
+              style={{ background: "rgba(0,0,0,.08)", border: "none", borderRadius: 8,
+                color: "#6b6460", fontSize: 16, width: 30, height: 30, cursor: "pointer",
                 display: "flex", alignItems: "center", justifyContent: "center" }}>‹</button>
-            <span style={{ color: T_BRIGHT, fontSize: 13, fontWeight: 700, minWidth: 90, textAlign: "center" }}>
-              {period === "monthly"
-                ? `${MONTH_NAMES[viewMonth - 1]} ${viewYear}`
-                : `${viewYear}`}
+            <span style={{ color: "#1a1410", fontSize: 14, fontWeight: 700 }}>
+              {MONTH_NAMES[viewMonth - 1]} {viewYear}
             </span>
-            <button onClick={() => period === "monthly" ? shiftMonth(1) : setViewYear(y => y + 1)}
-              style={{ background: PAGE_BG, border: `1px solid ${BORDER}`, borderRadius: 8,
-                color: T_DIM, fontSize: 14, width: 28, height: 28, cursor: "pointer",
+            <button onClick={() => shiftMonth(1)}
+              style={{ background: "rgba(0,0,0,.08)", border: "none", borderRadius: 8,
+                color: "#6b6460", fontSize: 16, width: 30, height: 30, cursor: "pointer",
                 display: "flex", alignItems: "center", justifyContent: "center" }}>›</button>
           </div>
-          <p style={{ color: T_MUTED, fontSize: 11, margin: "4px 0 0" }}>{periodTxns.length} transactions</p>
-        </div>
-        <button onClick={() => setShowTagMgr(true)}
-          style={{ width: 40, height: 40, borderRadius: "50%",
-            background: "linear-gradient(135deg,#6366f1,#8b5cf6)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            border: "none", cursor: "pointer" }}>
-          <Tag size={16} color="#fff" />
-        </button>
+        )}
+
+        <p style={{ color: "#9e9690", fontSize: 10, margin: "10px 0 0", textAlign: "center" }}>
+          {periodTxns.length} transactions · {blockedCount} blocked
+        </p>
       </div>
+
+      <div style={{ padding: "0 16px" }}>
 
       <PrivacyBanner />
 
-      {/* Summary cards */}
-      <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
-        <StatCard label="Credited" value={fmt(totalCredited)} accent={INCOME_COLOR} Icon={TrendingUp}   />
-        <StatCard label="Debited"  value={fmt(totalDebited)}  accent={DEBIT_COLOR}  Icon={TrendingDown} />
-      </div>
-
-      {/* Bar: Credit vs Debit */}
-      <div style={S.section}>
-        <p style={S.sectionTitle}>Credit vs Debit</p>
-        <ResponsiveContainer width="100%" height={150}>
-          <BarChart data={barData} barSize={52} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-            <XAxis dataKey="name" axisLine={false} tickLine={false}
-              tick={{ fill: T_MUTED, fontSize: 12, fontWeight: 500 }} />
-            <YAxis hide />
-            <Tooltip content={<CustomTooltip />} cursor={{ fill: "rgba(255,255,255,.03)" }} />
-            <Bar dataKey="amt" radius={[8, 8, 0, 0]}>
-              {barData.map((e, i) => <Cell key={i} fill={e.fill} />)}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* Spending Breakdown — Pie / Bar toggle */}
-      <div style={S.section}>
-        {/* Header row with toggle */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-          <p style={{ color: T_DIM, fontSize: 13, fontWeight: 600, margin: 0 }}>Spending Breakdown</p>
-          {/* Toggle pill */}
-          <div style={{ display: "flex", background: PAGE_BG, borderRadius: 20, padding: 3, gap: 2 }}>
-            {[
-              { id: "pie", label: "🥧 Pie"  },
-              { id: "bar", label: "📊 Bar"  },
-            ].map(opt => (
-              <button key={opt.id} onClick={() => setChartMode(opt.id)}
-                style={{
-                  padding: "4px 12px", borderRadius: 16, border: "none", cursor: "pointer",
-                  fontSize: 11, fontWeight: 600, transition: "all .2s",
-                  background: chartMode === opt.id ? "#6366f1" : "transparent",
-                  color:      chartMode === opt.id ? "#fff"    : T_MUTED,
-                }}>
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* PIE VIEW */}
-        {chartMode === "pie" && (
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{ flexShrink: 0 }}>
-              <ResponsiveContainer width={145} height={145}>
-                <PieChart>
-                  <Pie data={pieData} dataKey="value" cx="50%" cy="50%"
-                    innerRadius={38} outerRadius={58} paddingAngle={4} strokeWidth={0}>
-                    {pieData.map((e, i) => <Cell key={i} fill={e.color} />)}
-                  </Pie>
-                  <Tooltip content={<CustomTooltip />} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1 }}>
-              {pieData.map((e, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{ width: 9, height: 9, borderRadius: "50%", background: e.color, flexShrink: 0 }} />
-                  <div>
-                    <p style={{ color: T_DIM,    fontSize: 11, margin: 0 }}>{e.name}</p>
-                    <p style={{ color: T_BRIGHT, fontSize: 13, fontWeight: 700, margin: 0 }}>{fmt(e.value)}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* BAR VIEW */}
-        {chartMode === "bar" && (
-          <ResponsiveContainer width="100%" height={pieData.length * 42 + 10}>
-            <BarChart data={pieData.map(d => ({ name: d.name, amt: d.value, fill: d.color }))}
-              layout="vertical" margin={{ top: 0, right: 60, bottom: 0, left: 0 }}>
-              <XAxis type="number" hide />
-              <YAxis type="category" dataKey="name" axisLine={false} tickLine={false}
-                tick={{ fill: T_DIM, fontSize: 12 }} width={70} />
-              <Tooltip content={<CustomTooltip />} cursor={{ fill: "rgba(255,255,255,.03)" }} />
-              <Bar dataKey="amt" radius={[0, 8, 8, 0]} barSize={18}>
-                {pieData.map((e, i) => <Cell key={i} fill={e.color} />)}
-                <LabelList dataKey="amt" position="right"
-                  formatter={v => fmt(v)}
-                  style={{ fill: T_DIM, fontSize: 10 }} />
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        )}
-      </div>
-
-      {/* Yearly insight brief — only shown in yearly mode */}
-      {yearlyInsight && (
-        <div style={{ background: "rgba(99,102,241,.08)", border: "1px solid rgba(99,102,241,.2)",
-          borderRadius: 16, padding: "14px 16px", marginBottom: 14 }}>
-          <p style={{ color: "#818cf8", fontSize: 12, fontWeight: 700, margin: "0 0 10px", textTransform: "uppercase", letterSpacing: 0.5 }}>
-            📊 {viewYear} Year in Review
-          </p>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: T_DIM, fontSize: 12 }}>🔺 Biggest category</span>
-              <span style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 700 }}>
-                {yearlyInsight.topCat} · {fmt(yearlyInsight.topCatAmt)}
-              </span>
-            </div>
-            {yearlyInsight.topBrand && (
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ color: T_DIM, fontSize: 12 }}>🛒 Top brand</span>
-                <span style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 700 }}>
-                  {yearlyInsight.topBrand[0]} · {fmt(yearlyInsight.topBrand[1])}
-                </span>
-              </div>
-            )}
-            {yearlyInsight.heaviestMonth && (
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ color: T_DIM, fontSize: 12 }}>📅 Heaviest month</span>
-                <span style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 700 }}>
-                  {yearlyInsight.heaviestMonth} · {fmt(yearlyInsight.heaviestAmt)}
-                </span>
-              </div>
-            )}
-            {yearlyInsight.biggestSpend && (
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span style={{ color: T_DIM, fontSize: 12 }}>💸 Biggest single spend</span>
-                <span style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 700 }}>
-                  {fmt(yearlyInsight.biggestSpend.amount)} · {yearlyInsight.biggestSpend.date}
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Category summary row — UHO / QuickCart / Misc — CLICKABLE */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
+      {/* Income / Spent stat cards */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
         {[
-          { cat: "uho",           label: "UHO",       val: totalUHO,       color: UHO_COLOR,  sub: "> ₹2k", emoji: "🏠" },
-          { cat: "quickcart",     label: "QuickCart",  val: totalQuickCart, color: QC_COLOR,   sub: "brands", emoji: "🛒" },
-          { cat: "miscellaneous", label: "Misc",       val: totalMisc,      color: MISC_COLOR, sub: "≤ ₹2k", emoji: "🏷️" },
-        ].map(({ cat, label, val, color, sub, emoji }) => (
-          <div key={cat} onClick={() => toggleCat(cat)}
-            style={{ background: selectedCat === cat ? `${color}22` : `${color}10`,
-              border: `1px solid ${selectedCat === cat ? color : color + "28"}`,
-              borderRadius: 14, padding: "12px 10px", cursor: "pointer",
-              transition: "all .2s", transform: selectedCat === cat ? "scale(1.03)" : "scale(1)" }}>
-            <p style={{ color, fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, margin: "0 0 4px" }}>{emoji} {label}</p>
-            <p style={{ color: T_BRIGHT, fontSize: 14, fontWeight: 800, margin: "0 0 2px" }}>{fmt(val)}</p>
-            <p style={{ color: T_MUTED, fontSize: 9, margin: 0 }}>{selectedCat === cat ? "tap to close" : sub}</p>
+          { label: "INCOME",  val: totalCredited, color: "#4ade80", bg: "rgba(74,222,128,.08)" },
+          { label: "SPENT",   val: totalDebited,  color: "#f87171", bg: "rgba(248,113,113,.08)" },
+        ].map(({ label, val, color, bg }) => (
+          <div key={label} style={{ flex: 1, background: bg, borderRadius: 18, padding: "14px 14px" }}>
+            <p style={{ color, fontSize: 9, fontWeight: 800, letterSpacing: 1.2, margin: "0 0 6px" }}>{label}</p>
+            <p style={{ color: T_BRIGHT, fontSize: 20, fontWeight: 800, margin: 0, letterSpacing: -0.5 }}>{fmt(val)}</p>
           </div>
         ))}
       </div>
 
-      {/* DRILL-DOWN: UHO — show what was spent on */}
+      {/* ── Budget Allocation — donut + vertical columns ── */}
+      {totalDebited > 0 && (() => {
+        const cats = [
+          { cat: "uho",           label: "UHO",     emoji: "🏠", val: totalUHO,       color: UHO_COLOR  },
+          { cat: "quickcart",     label: "Quick",   emoji: "🛒", val: totalQuickCart, color: QC_COLOR   },
+          { cat: "creditcard",    label: "CC",      emoji: "💳", val: totalCC,        color: CC_COLOR   },
+          { cat: "investments",   label: "Invest",  emoji: "📈", val: totalInv,       color: INV_COLOR  },
+          { cat: "miscellaneous", label: "Misc",    emoji: "🏷️", val: totalMisc,      color: MISC_COLOR },
+        ];
+        const maxVal = Math.max(...cats.map(c => c.val), 1);
+        return (
+          <div style={{ marginBottom: 16 }}>
+            {/* Section header */}
+            <p style={{ color: T_DIM, fontSize: 12, fontWeight: 700, letterSpacing: 0.8,
+              textTransform: "uppercase", margin: "0 0 14px" }}>Your Budget Tracker</p>
+
+            {/* Donut + legend row */}
+            <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 20 }}>
+              {/* Donut */}
+              <div style={{ position: "relative", flexShrink: 0 }}>
+                <ResponsiveContainer width={130} height={130}>
+                  <PieChart>
+                    <Pie data={cats.map(c => ({ name: c.label, value: c.val || 0.01 }))}
+                      dataKey="value" cx="50%" cy="50%"
+                      innerRadius={40} outerRadius={58} paddingAngle={3} strokeWidth={0}>
+                      {cats.map((c, i) => <Cell key={i} fill={c.color} />)}
+                    </Pie>
+                  </PieChart>
+                </ResponsiveContainer>
+                {/* Center label */}
+                <div style={{ position: "absolute", top: "50%", left: "50%",
+                  transform: "translate(-50%,-50%)", textAlign: "center", pointerEvents: "none" }}>
+                  <p style={{ color: T_BRIGHT, fontSize: 13, fontWeight: 800, margin: 0, lineHeight: 1 }}>
+                    {fmt(totalDebited)}
+                  </p>
+                  <p style={{ color: T_MUTED, fontSize: 9, margin: "3px 0 0" }}>spent</p>
+                </div>
+              </div>
+
+              {/* Legend */}
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
+                {cats.map(c => {
+                  const pct = totalDebited > 0 ? Math.round((c.val / totalDebited) * 100) : 0;
+                  return (
+                    <div key={c.cat}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span style={{ color: T_DIM, fontSize: 11, fontWeight: 600 }}>{c.emoji} {c.label}</span>
+                        <span style={{ color: c.color, fontSize: 11, fontWeight: 800 }}>{pct}%</span>
+                      </div>
+                      <div style={{ height: 5, borderRadius: 99, background: "rgba(255,255,255,.06)" }}>
+                        <div style={{ height: "100%", borderRadius: 99, background: c.color,
+                          width: `${pct}%`, transition: "width .5s ease" }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Vertical column allocation bars */}
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-end", justifyContent: "center",
+              background: CARD_BG, borderRadius: 20, padding: "20px 16px 14px" }}>
+              {cats.map(c => {
+                const pct = maxVal > 0 ? Math.round((c.val / maxVal) * 100) : 0;
+                const isActive = selectedCat === c.cat;
+                return (
+                  <div key={c.cat} onClick={() => toggleCat(c.cat)}
+                    style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center",
+                      cursor: "pointer", gap: 6 }}>
+                    {/* Amount label */}
+                    <p style={{ color: isActive ? c.color : T_BRIGHT, fontSize: 11, fontWeight: 800,
+                      margin: 0, textAlign: "center" }}>{fmt(c.val)}</p>
+                    {/* % label */}
+                    <p style={{ color: c.color, fontSize: 10, fontWeight: 700, margin: 0 }}>
+                      {totalDebited > 0 ? Math.round((c.val / totalDebited) * 100) : 0}%
+                    </p>
+                    {/* Bar column */}
+                    <div style={{ width: "100%", height: 100, borderRadius: 8, overflow: "hidden",
+                      background: "rgba(255,255,255,.05)", display: "flex", alignItems: "flex-end" }}>
+                      <div style={{
+                        width: "100%", borderRadius: 8,
+                        height: `${Math.max(pct, 4)}%`,
+                        background: isActive ? c.color : `${c.color}88`,
+                        transition: "height .5s ease, background .2s",
+                      }} />
+                    </div>
+                    {/* Label */}
+                    <p style={{ color: isActive ? c.color : T_MUTED, fontSize: 10, fontWeight: 700,
+                      margin: 0, textAlign: "center", letterSpacing: 0.3 }}>{c.emoji} {c.label}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Dark stat cards — UHO / QuickCart / CC / Misc ── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+        {[
+          { cat: "uho",           label: "UHO",         emoji: "🏠", val: totalUHO,       color: UHO_COLOR,
+            sub: "Large spends above ₹2,000",           count: periodTxns.filter(t => t.category === "uho").length },
+          { cat: "quickcart",     label: "QuickCart",   emoji: "🛒", val: totalQuickCart, color: QC_COLOR,
+            sub: "Brands: Zomato, Amazon & more",       count: periodTxns.filter(t => t.category === "quickcart").length },
+          { cat: "creditcard",    label: "Credit Card", emoji: "💳", val: totalCC,        color: CC_COLOR,
+            sub: "All credit card transactions",        count: periodTxns.filter(t => t.category === "creditcard").length },
+          { cat: "investments",   label: "Investments", emoji: "📈", val: totalInv,       color: INV_COLOR,
+            sub: "Groww, Zerodha, mutual funds",        count: periodTxns.filter(t => t.category === "investments").length },
+          { cat: "miscellaneous", label: "Misc",        emoji: "🏷️", val: totalMisc,      color: MISC_COLOR,
+            sub: "Small spends below ₹2,000",           count: periodTxns.filter(t => t.category === "miscellaneous").length },
+        ].map(({ cat, label, emoji, val, color, sub, count }) => {
+          const isActive = selectedCat === cat;
+          const pct = totalDebited > 0 ? Math.round((val / totalDebited) * 100) : 0;
+          return (
+            <div key={cat} onClick={() => toggleCat(cat)}
+              style={{ background: isActive ? `${color}18` : CARD_BG,
+                border: `1px solid ${isActive ? color + "55" : "transparent"}`,
+                borderRadius: 20, padding: "16px 18px", cursor: "pointer",
+                transition: "all .2s" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <p style={{ color: color, fontSize: 10, fontWeight: 800, letterSpacing: 1,
+                    textTransform: "uppercase", margin: "0 0 4px" }}>{emoji} {label}</p>
+                  <p style={{ color: T_BRIGHT, fontSize: 26, fontWeight: 900, margin: "0 0 4px",
+                    letterSpacing: -1 }}>{fmt(val)}</p>
+                  <p style={{ color: T_MUTED, fontSize: 11, margin: 0 }}>{sub}</p>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <p style={{ color: color, fontSize: 22, fontWeight: 900, margin: "0 0 2px" }}>{pct}%</p>
+                  <p style={{ color: T_MUTED, fontSize: 10, margin: 0 }}>{count} txns</p>
+                </div>
+              </div>
+              {/* Progress bar */}
+              <div style={{ marginTop: 12, height: 4, borderRadius: 99, background: "rgba(255,255,255,.06)" }}>
+                <div style={{ height: "100%", borderRadius: 99, background: color,
+                  width: `${pct}%`, transition: "width .6s ease" }} />
+              </div>
+              {isActive && (
+                <p style={{ color: color, fontSize: 10, margin: "8px 0 0", textAlign: "center", fontWeight: 600 }}>
+                  ↑ Tap to close
+                </p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* DRILL-DOWN: UHO */}
       {selectedCat === "uho" && drillTxns.length > 0 && (
-        <div style={{ ...S.section, borderColor: UHO_COLOR + "30" }}>
-          <p style={{ color: UHO_COLOR, fontSize: 12, fontWeight: 700, margin: "0 0 12px" }}>🏠 UHO Spends — {fmt(totalUHO)}</p>
+        <div style={{ background: `${UHO_COLOR}0a`, border: `1px solid ${UHO_COLOR}25`,
+          borderRadius: 18, padding: "14px 16px", marginBottom: 14 }}>
+          <p style={{ color: UHO_COLOR, fontSize: 12, fontWeight: 700, margin: "0 0 12px" }}>🏠 UHO Transactions</p>
           {drillTxns.map(t => (
             <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-              padding: "8px 0", borderBottom: `1px solid ${BORDER}33` }}>
+              padding: "10px 0", borderBottom: `1px solid ${BORDER}33` }}>
               <div>
                 <p style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 600, margin: "0 0 2px" }}>{t.bank}</p>
                 <p style={{ color: T_MUTED, fontSize: 10, margin: 0 }}>{t.date}{t.isCreditCard ? " · CC" : ""}</p>
               </div>
-              <p style={{ color: UHO_COLOR, fontSize: 13, fontWeight: 700, margin: 0 }}>−{fmt(t.amount)}</p>
+              <p style={{ color: UHO_COLOR, fontSize: 14, fontWeight: 800, margin: 0 }}>−{fmt(t.amount)}</p>
             </div>
           ))}
         </div>
       )}
 
-      {/* DRILL-DOWN: QuickCart — brand breakdown + transactions */}
+      {/* DRILL-DOWN: QuickCart */}
       {selectedCat === "quickcart" && (
-        <div style={{ ...S.section, borderColor: QC_COLOR + "30" }}>
+        <div style={{ background: `${QC_COLOR}0a`, border: `1px solid ${QC_COLOR}25`,
+          borderRadius: 18, padding: "14px 16px", marginBottom: 14 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
             <p style={{ color: QC_COLOR, fontSize: 12, fontWeight: 700, margin: 0 }}>🛒 QuickCart — {fmt(totalQuickCart)}</p>
             <div style={{ display: "flex", background: PAGE_BG, borderRadius: 20, padding: 3, gap: 2 }}>
               {[{ id: "bar", label: "📊" }, { id: "pie", label: "🥧" }].map(opt => (
-                <button key={opt.id} onClick={() => setQcChartMode(opt.id)}
+                <button key={opt.id} onClick={e => { e.stopPropagation(); setQcChartMode(opt.id); }}
                   style={{ padding: "4px 10px", borderRadius: 16, border: "none", cursor: "pointer",
                     fontSize: 11, fontWeight: 600,
                     background: qcChartMode === opt.id ? QC_COLOR : "transparent",
@@ -812,13 +903,12 @@ export default function App() {
           )}
           {brandChartData.length > 0 && qcChartMode === "pie" && (
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
-              <ResponsiveContainer width={130} height={130}>
+              <ResponsiveContainer width={120} height={120}>
                 <PieChart>
                   <Pie data={brandChartData.map(d => ({ ...d, value: d.amt }))} dataKey="value"
-                    cx="50%" cy="50%" innerRadius={32} outerRadius={52} paddingAngle={4} strokeWidth={0}>
+                    cx="50%" cy="50%" innerRadius={28} outerRadius={48} paddingAngle={4} strokeWidth={0}>
                     {brandChartData.map((_, i) => <Cell key={i} fill={`hsl(${340 + i * 22},80%,${58 + i*4}%)`} />)}
                   </Pie>
-                  <Tooltip content={<CustomTooltip />} />
                 </PieChart>
               </ResponsiveContainer>
               <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -836,14 +926,84 @@ export default function App() {
           )}
           {drillTxns.map(t => (
             <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-              padding: "7px 0", borderBottom: `1px solid ${BORDER}33` }}>
+              padding: "10px 0", borderBottom: `1px solid ${BORDER}33` }}>
               <div>
-                <p style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 600, margin: "0 0 1px" }}>
+                <p style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 600, margin: "0 0 1px" }}>{t.brand || t.bank}</p>
+                <p style={{ color: T_MUTED, fontSize: 10, margin: 0 }}>{t.date}</p>
+              </div>
+              <p style={{ color: QC_COLOR, fontSize: 14, fontWeight: 800, margin: 0 }}>−{fmt(t.amount)}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* DRILL-DOWN: Investments */}
+      {selectedCat === "investments" && drillTxns.length > 0 && (
+        <div style={{ background: `${INV_COLOR}0a`, border: `1px solid ${INV_COLOR}25`,
+          borderRadius: 18, padding: "14px 16px", marginBottom: 14 }}>
+          <p style={{ color: INV_COLOR, fontSize: 12, fontWeight: 700, margin: "0 0 4px" }}>
+            📈 Investments — {fmt(totalInv)}
+          </p>
+          <p style={{ color: T_MUTED, fontSize: 10, margin: "0 0 12px" }}>
+            Groww, Zerodha, mutual funds & SIPs
+          </p>
+          {drillTxns.map(t => (
+            <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+              padding: "10px 0", borderBottom: `1px solid ${BORDER}33` }}>
+              <div>
+                <p style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 600, margin: "0 0 2px" }}>
                   {t.brand || t.bank}
                 </p>
                 <p style={{ color: T_MUTED, fontSize: 10, margin: 0 }}>{t.date}</p>
               </div>
-              <p style={{ color: QC_COLOR, fontSize: 13, fontWeight: 700, margin: 0 }}>−{fmt(t.amount)}</p>
+              <p style={{ color: INV_COLOR, fontSize: 14, fontWeight: 800, margin: 0 }}>−{fmt(t.amount)}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* DRILL-DOWN: Credit Card */}
+      {selectedCat === "creditcard" && drillTxns.length > 0 && (
+        <div style={{ background: `${CC_COLOR}0a`, border: `1px solid ${CC_COLOR}25`,
+          borderRadius: 18, padding: "14px 16px", marginBottom: 14 }}>
+          <p style={{ color: CC_COLOR, fontSize: 12, fontWeight: 700, margin: "0 0 4px" }}>
+            💳 Credit Card — {fmt(totalCC)}
+          </p>
+          <p style={{ color: T_MUTED, fontSize: 10, margin: "0 0 12px" }}>
+            Transactions billed to your credit cards
+          </p>
+          {/* CC brand breakdown mini-table */}
+          {(() => {
+            const ccBrandMap = {};
+            drillTxns.filter(t => t.brand).forEach(t => {
+              ccBrandMap[t.brand] = (ccBrandMap[t.brand] || 0) + t.amount;
+            });
+            const ccBrands = Object.entries(ccBrandMap).sort((a,b) => b[1]-a[1]);
+            return ccBrands.length > 0 ? (
+              <div style={{ background: "rgba(167,139,250,.08)", borderRadius: 12,
+                padding: "10px 12px", marginBottom: 12 }}>
+                <p style={{ color: CC_COLOR, fontSize: 10, fontWeight: 700,
+                  textTransform: "uppercase", letterSpacing: 0.8, margin: "0 0 8px" }}>By Brand</p>
+                {ccBrands.map(([brand, amt]) => (
+                  <div key={brand} style={{ display: "flex", justifyContent: "space-between",
+                    padding: "4px 0" }}>
+                    <span style={{ color: T_DIM, fontSize: 11 }}>{brand}</span>
+                    <span style={{ color: T_BRIGHT, fontSize: 11, fontWeight: 700 }}>{fmt(amt)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null;
+          })()}
+          {drillTxns.map(t => (
+            <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+              padding: "10px 0", borderBottom: `1px solid ${BORDER}33` }}>
+              <div>
+                <p style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 600, margin: "0 0 2px" }}>
+                  {t.brand || t.bank}
+                </p>
+                <p style={{ color: T_MUTED, fontSize: 10, margin: 0 }}>{t.date} · {t.bank} CC</p>
+              </div>
+              <p style={{ color: CC_COLOR, fontSize: 14, fontWeight: 800, margin: 0 }}>−{fmt(t.amount)}</p>
             </div>
           ))}
         </div>
@@ -851,58 +1011,72 @@ export default function App() {
 
       {/* DRILL-DOWN: Misc */}
       {selectedCat === "miscellaneous" && drillTxns.length > 0 && (
-        <div style={{ ...S.section, borderColor: MISC_COLOR + "30" }}>
-          <p style={{ color: MISC_COLOR, fontSize: 12, fontWeight: 700, margin: "0 0 12px" }}>🏷️ Misc Spends — {fmt(totalMisc)}</p>
+        <div style={{ background: `${MISC_COLOR}0a`, border: `1px solid ${MISC_COLOR}25`,
+          borderRadius: 18, padding: "14px 16px", marginBottom: 14 }}>
+          <p style={{ color: MISC_COLOR, fontSize: 12, fontWeight: 700, margin: "0 0 12px" }}>🏷️ Misc Transactions</p>
           {drillTxns.map(t => (
             <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-              padding: "8px 0", borderBottom: `1px solid ${BORDER}33` }}>
+              padding: "10px 0", borderBottom: `1px solid ${BORDER}33` }}>
               <div>
-                <p style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 600, margin: "0 0 2px" }}>
-                  {t.tag || t.bank}
-                </p>
-                <p style={{ color: T_MUTED, fontSize: 10, margin: 0 }}>{t.date} · {fmt(t.amount)}</p>
+                <p style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 600, margin: "0 0 2px" }}>{t.tag || t.bank}</p>
+                <p style={{ color: T_MUTED, fontSize: 10, margin: 0 }}>{t.date}</p>
               </div>
-              <p style={{ color: MISC_COLOR, fontSize: 13, fontWeight: 700, margin: 0 }}>−{fmt(t.amount)}</p>
+              <p style={{ color: MISC_COLOR, fontSize: 14, fontWeight: 800, margin: 0 }}>−{fmt(t.amount)}</p>
             </div>
           ))}
         </div>
       )}
 
-      {/* Tag chart — only when tags exist */}
-      {tagChartData.length > 0 && (
-        <div style={S.section}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
-            <Tag size={13} color="#6366f1" />
-            <p style={{ color: "#818cf8", fontSize: 13, fontWeight: 700, margin: 0 }}>Spending by Tag</p>
+      {/* ── Yearly insight brief ── */}
+      {yearlyInsight && (
+        <div style={{ background: "rgba(99,102,241,.08)", border: "1px solid rgba(99,102,241,.18)",
+          borderRadius: 20, padding: "16px 18px", marginBottom: 14 }}>
+          <p style={{ color: "#818cf8", fontSize: 11, fontWeight: 800, margin: "0 0 12px",
+            textTransform: "uppercase", letterSpacing: 1 }}>📊 {viewYear} Year in Review</p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {[
+              { icon: "🔺", label: "Top Category",   val: `${yearlyInsight.topCat} · ${fmt(yearlyInsight.topCatAmt)}` },
+              yearlyInsight.topBrand && { icon: "🛒", label: "Top Brand", val: `${yearlyInsight.topBrand[0]} · ${fmt(yearlyInsight.topBrand[1])}` },
+              yearlyInsight.heaviestMonth && { icon: "📅", label: "Heaviest Month", val: `${yearlyInsight.heaviestMonth} · ${fmt(yearlyInsight.heaviestAmt)}` },
+              yearlyInsight.biggestSpend  && { icon: "💸", label: "Biggest Spend",  val: `${fmt(yearlyInsight.biggestSpend.amount)} · ${yearlyInsight.biggestSpend.date}` },
+            ].filter(Boolean).map((item, i) => (
+              <div key={i} style={{ background: "rgba(99,102,241,.08)", borderRadius: 14, padding: "12px 12px" }}>
+                <p style={{ color: T_MUTED, fontSize: 10, margin: "0 0 4px" }}>{item.icon} {item.label}</p>
+                <p style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 700, margin: 0 }}>{item.val}</p>
+              </div>
+            ))}
           </div>
-          <ResponsiveContainer width="100%" height={tagChartData.length * 36 + 10}>
-            <BarChart data={tagChartData} layout="vertical"
-              margin={{ top: 0, right: 60, bottom: 0, left: 0 }}>
+        </div>
+      )}
+
+      {/* ── Spending by Tag chart ── */}
+      {tagChartData.length > 0 && (
+        <div style={{ background: CARD_BG, borderRadius: 20, padding: "16px 16px", marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
+            <Tag size={13} color="#818cf8" />
+            <p style={{ color: "#818cf8", fontSize: 12, fontWeight: 700, textTransform: "uppercase",
+              letterSpacing: 0.8, margin: 0 }}>Spending by Tag</p>
+          </div>
+          <ResponsiveContainer width="100%" height={tagChartData.length * 38 + 10}>
+            <BarChart data={tagChartData} layout="vertical" margin={{ top: 0, right: 60, bottom: 0, left: 0 }}>
               <XAxis type="number" hide />
               <YAxis type="category" dataKey="name" axisLine={false} tickLine={false}
                 tick={{ fill: T_DIM, fontSize: 12 }} width={80} />
               <Tooltip content={<CustomTooltip />} cursor={{ fill: "rgba(99,102,241,.05)" }} />
-              <Bar dataKey="amt" fill="#6366f1" radius={[0, 6, 6, 0]} barSize={14}>
-                <LabelList dataKey="amt" position="right"
-                  formatter={v => fmt(v)}
-                  style={{ fill: T_DIM, fontSize: 10 }} />
+              <Bar dataKey="amt" fill="#6366f1" radius={[0, 8, 8, 0]} barSize={16}>
+                <LabelList dataKey="amt" position="right" formatter={v => fmt(v)} style={{ fill: T_DIM, fontSize: 10 }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
-          <p style={{ color: T_MUTED, fontSize: 10, margin: "10px 0 0", textAlign: "center" }}>
-            Tag transactions in Overview → chart updates here
-          </p>
         </div>
       )}
-
-      {/* Tag chart empty state */}
       {tagChartData.length === 0 && (
-        <div style={{ background: "rgba(99,102,241,.06)", border: "1px dashed rgba(99,102,241,.25)",
-          borderRadius: 16, padding: "18px 16px", textAlign: "center" }}>
-          <Tag size={20} color="#6366f1" style={{ margin: "0 auto 8px" }} />
-          <p style={{ color: "#818cf8", fontSize: 13, fontWeight: 600, margin: "0 0 4px" }}>Tag Chart</p>
+        <div style={{ background: "rgba(99,102,241,.05)", border: "1px dashed rgba(99,102,241,.2)",
+          borderRadius: 18, padding: "18px 16px", textAlign: "center", marginBottom: 14 }}>
+          <Tag size={18} color="#6366f1" style={{ margin: "0 auto 8px" }} />
+          <p style={{ color: "#818cf8", fontSize: 12, fontWeight: 600, margin: "0 0 4px" }}>Tag Chart</p>
           <p style={{ color: T_MUTED, fontSize: 11, margin: 0 }}>
-            Go to Overview → tap 🏷️ on any transaction → a spending-by-tag chart appears here
+            Go to Overview → tap 🏷️ on any transaction to build your tag chart
           </p>
         </div>
       )}
@@ -932,6 +1106,8 @@ export default function App() {
             { val: "income",        label: "Income",    color: INCOME_COLOR },
             { val: "quickcart",     label: "🛒 Quick",  color: QC_COLOR     },
             { val: "uho",           label: "UHO",       color: UHO_COLOR    },
+            { val: "creditcard",    label: "💳 CC",     color: CC_COLOR     },
+            { val: "investments",   label: "📈 Invest", color: INV_COLOR    },
             { val: "miscellaneous", label: "Misc",      color: MISC_COLOR   },
           ].map(f => (
             <button key={f.val}
