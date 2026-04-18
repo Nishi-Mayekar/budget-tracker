@@ -1,5 +1,6 @@
 /**
- * SMS Budget Tracker — Secure Edition v2
+ * SMS Budget Tracker — Secure Edition v3
+ * Design: Claude Design handoff — premium fintech, Inter Tight, warm cream
  *
  * PRIVACY & SECURITY CONTRACT (GDPR · CCPA · India DPDP Act 2023)
  * ─────────────────────────────────────────────────────────────────
@@ -14,35 +15,10 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { registerPlugin } from "@capacitor/core";
-
-// Native SMS plugin — reads Android SMS inbox via SmsPlugin.java
 const SmsNative = registerPlugin("Sms");
 import {
-  BarChart, Bar, PieChart, Pie, Cell,
-  XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList
 } from "recharts";
-import { Home, List, TrendingUp, TrendingDown, Tag, X, Plus, ShieldCheck } from "lucide-react";
-
-// ─── Theme — warm light ────────────────────────────────────────────────────
-const INCOME_COLOR = "#059669";
-const MISC_COLOR   = "#6366f1";
-const DEBIT_COLOR  = "#dc2626";
-const QC_COLOR     = "#e11d48";   // QuickCart — rose
-const CC_COLOR     = "#7c3aed";   // Credit Card — violet
-const INV_COLOR    = "#0891b2";   // Investments — cyan
-const SAFE_COLOR   = "#0891b2";
-const CARD_BG      = "#ffffff";
-const PAGE_BG      = "#f5f3ef";   // warm cream
-const BORDER       = "#e8e2d9";
-const T_MUTED      = "#9e8f7a";
-const T_DIM        = "#6b5f52";
-const T_BRIGHT     = "#1a1410";
-const SHADOW       = "0 2px 16px rgba(0,0,0,.07)";
-
-const DEFAULT_TAGS = [
-  "Food", "Transport", "Shopping", "Entertainment",
-  "Utilities", "Travel", "Electronics", "Medical", "Groceries"
-];
 
 // ══════════════════════════════════════════════════════════════════════════
 //  SECURITY ENGINE — OTP / sensitive message blocker
@@ -66,34 +42,21 @@ const BLOCKED_PATTERNS = [
 
 function isTransactionMessage(raw) {
   if (!raw || typeof raw !== "string") return false;
-  // Accept ₹ OR Rs. amounts (covers bank SMS + credit card SMS)
   if (!(/(?:₹[\s\d,]|Rs\.?\s*[\d,])/.test(raw))) return false;
-  // Must have a transaction keyword — covers debit/credit bank SMS and credit card SMS
   if (!(/\b(credited|debited|spent|charged|used\s+for|purchase[d]?|transaction)\b/i.test(raw))) return false;
   return !BLOCKED_PATTERNS.some(p => p.test(raw));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-//  BRAND DETECTION — allowlist of known public brands only
-//  Nothing outside this list is ever read from the message.
-//  Brand names are public company names, not PII — GDPR-safe.
+//  BRAND DETECTION
 // ══════════════════════════════════════════════════════════════════════════
 const QUICKCART_BRANDS = [
-  // Food delivery
-  "Zomato", "Swiggy",
-  // Grocery / q-commerce
-  "Zepto", "Blinkit", "Instamart", "BigBasket", "JioMart", "Dunzo",
-  // E-commerce
-  "Amazon", "Flipkart", "Meesho", "Ajio", "Myntra", "Nykaa",
-  // Entertainment / out
-  "District", "BookMyShow",
-  // Pharmacy
-  "PharmEasy", "1mg", "Medlife",
-  // Other
+  "Zomato", "Swiggy", "Zepto", "Blinkit", "Instamart", "BigBasket",
+  "JioMart", "Dunzo", "Amazon", "Flipkart", "Meesho", "Ajio", "Myntra",
+  "Nykaa", "District", "BookMyShow", "PharmEasy", "1mg", "Medlife",
   "Swiggy Instamart", "ONDC",
 ];
 
-// ── Investment brand allowlist ───────────────────────────────────────────
 const INVESTMENT_BRANDS = [
   "Groww", "Zerodha", "Kuvera", "ET Money", "INDmoney", "Angel One",
   "AngelOne", "Paytm Money", "PaytmMoney", "Upstox", "ICICI Direct",
@@ -103,38 +66,29 @@ const INVESTMENT_BRANDS = [
   "Mirae Asset", "DSP Mutual", "UTI MF", "Franklin Templeton",
   "Coin by Zerodha",
 ];
+
 const INV_REGEX = new RegExp(
-  INVESTMENT_BRANDS.map(b => `\\b${b.replace(/[-\s]/g, "[\\s-]?")}\\b`).join("|"),
-  "i"
+  INVESTMENT_BRANDS.map(b => `\\b${b.replace(/[-\s]/g, "[\\s-]?")}\\b`).join("|"), "i"
 );
 function detectInvestmentBrand(raw) {
   const m = raw.match(INV_REGEX);
   if (m) return m[0];
-  // Fallback: SIP / NACH auto-debit / mutual fund keywords (no brand name needed)
   if (/\bSIP\b.*\b(?:mandate|debit|amount|auto)\b|\bNACH\b.*\b(?:SIP|mutual\s*fund|MF)\b|\bmutual\s*fund\s*SIP\b|\bMF\s*(?:SIP|debit|auto)\b/i.test(raw))
     return "SIP / MF";
   return null;
 }
 
-/** Builds one combined regex for all brands (case-insensitive word-boundary match) */
 const BRAND_REGEX = new RegExp(
-  QUICKCART_BRANDS.map(b => `\\b${b.replace(/[-\s]/g, "[\\s-]?")}\\b`).join("|"),
-  "i"
+  QUICKCART_BRANDS.map(b => `\\b${b.replace(/[-\s]/g, "[\\s-]?")}\\b`).join("|"), "i"
 );
-
 function detectBrand(raw) {
-  const match = raw.match(BRAND_REGEX);
-  return match ? match[0] : null;
+  const m = raw.match(BRAND_REGEX);
+  return m ? m[0] : null;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
 //  UPI NARRATION AUTO-TAGGER
-//  Reads ONLY the narration/remarks field of UPI SMS (the note you type in
-//  GPay / PhonePe). Raw text is NEVER stored — only the matched tag label.
-//  e.g. "grocery" → tag:"Groceries", "travel" → tag:"Travel"
 // ══════════════════════════════════════════════════════════════════════════
-
-// Keyword → tag mapping (only predefined labels are ever stored)
 const NARRATION_TAG_MAP = [
   { tag: "Groceries",     keywords: ["grocery","groceries","kirana","sabzi","vegetable","fruit","provision","supermarket","dmart","reliance fresh","more store"] },
   { tag: "Food",          keywords: ["food","restaurant","cafe","dining","lunch","dinner","breakfast","meal","snack","coffee","tea","juice","bakery","hotel food"] },
@@ -147,30 +101,22 @@ const NARRATION_TAG_MAP = [
   { tag: "Rent",          keywords: ["rent","maintenance","society","housing","landlord","flat","deposit","lease"] },
   { tag: "Education",     keywords: ["school","college","fees","education","course","tuition","book","stationery","library","exam"] },
   { tag: "Self Care",     keywords: ["salon","spa","haircut","gym","fitness","yoga","wellness","beauty","parlour","massage"] },
-  { tag: "Savings",       keywords: ["savings","investment","fd","rd","mutual fund","sip","ppf","insurance","premium","lic"] },
 ];
 
-// Extract the narration/note from UPI bank SMS — only the narration segment
-// Patterns cover HDFC, SBI, ICICI, Axis, Kotak, Yes Bank, IndusInd UPI formats
 function extractUpiNarration(raw) {
   const patterns = [
-    // HDFC:  Info: UPI/refno/NARRATION/vpa@bank
     /\bInfo:\s*UPI[\/\-]\d+[\/\-]([^\/\-,@\n]{2,30})[\/\-]/i,
-    // Axis / generic: UPI/refno/vpa@bank/NARRATION
     /UPI[\/\-]\d+[\/\-][^\/]+@[^\/]+[\/\-]([^\/,\.\n]{2,30})/i,
-    // Remarks / Note field (SBI, ICICI variants)
     /\bRemarks?:\s*([^\.\n,]{2,30})/i,
     /\bNote:\s*([^\.\n,]{2,30})/i,
-    // PhonePe / PayTM narration after "for"
     /\bpaid\s+(?:for|via)\s+([a-z][a-z\s]{1,25})/i,
   ];
   for (const p of patterns) {
     const m = raw.match(p);
     if (m) {
       const narration = m[1].trim().toLowerCase();
-      // Reject if narration looks like a VPA, reference number, or is too generic
       if (/[@\d]{4,}/.test(narration)) continue;
-      if (narration.length < 3)        continue;
+      if (narration.length < 3) continue;
       return narration;
     }
   }
@@ -186,39 +132,28 @@ function narrationToTag(raw) {
   return null;
 }
 
-// ── Secure parser ───────────────────────────────────────────────────────
+// ── Secure parser ─────────────────────────────────────────────────────────
 function secureExtract(raw) {
-  // Match ₹ or Rs. amounts (credit card SMS often use Rs.)
   const amtMatch = raw.match(/(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)/i);
   if (!amtMatch) return null;
   const amount = Math.round(parseFloat(amtMatch[1].replace(/,/g, "")) * 100) / 100;
   if (!isFinite(amount) || amount <= 0) return null;
 
-  // credited / refund / cashback / reversal = money coming in
-  const isCredit  = /\bcredited\b/i.test(raw);
-  const isRefund  = /\b(refund|reversal|cashback|cash\s*back|reversed|returned)\b/i.test(raw);
-  const type = (isCredit || isRefund) ? "credited" : "debited";
-  const isRefundTxn = isRefund; // always badge when refund/cashback keyword present
+  const isCredit   = /\bcredited\b/i.test(raw);
+  const isRefund   = /\b(refund|reversal|cashback|cash\s*back|reversed|returned)\b/i.test(raw);
+  const type       = (isCredit || isRefund) ? "credited" : "debited";
+  const isRefundTxn = isRefund;
 
-  // Detect if this is a credit card transaction
   const isCreditCard = /credit[\s\-]?card|cc\s+(ending|no|limit|card)|credit\s*a\/c/i.test(raw);
+  const brand    = detectBrand(raw);
+  const invBrand = detectInvestmentBrand(raw);
 
-  const brand       = detectBrand(raw);           // null if no known QC brand
-  const invBrand    = detectInvestmentBrand(raw); // null if no investment brand
-
-  // Category logic:
-  //   credited              → income
-  //   credit card debit     → creditcard   (own category, regardless of amount/brand)
-  //   investment platform   → investments  (Groww, Zerodha, etc.)
-  //   known QC brand        → quickcart    (regardless of amount)
-  //   debit > 2000          → uho
-  //   debit ≤ 2000          → miscellaneous
   let category;
   if      (type === "credited") category = "income";
   else if (isCreditCard)        category = "creditcard";
   else if (invBrand)            category = "investments";
   else if (brand)               category = "quickcart";
-  else                          category = "miscellaneous"; // everything else → Misc
+  else                          category = "miscellaneous";
 
   return { amount, type, category, brand: brand || invBrand, isCreditCard, isRefund: isRefundTxn };
 }
@@ -230,14 +165,12 @@ function processSMS(sms) {
   const parsed = secureExtract(sms.raw);
   if (!parsed) return null;
 
-  // Derive month/year for period filtering
   let monthKey, year;
   if (sms.timestamp) {
     const d = new Date(sms.timestamp);
     year     = d.getFullYear();
     monthKey = `${year}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   } else {
-    // Parse from date string like "Apr 08" — assume current year
     const now  = new Date();
     year       = now.getFullYear();
     const parts = (sms.date || "").split(" ");
@@ -246,26 +179,19 @@ function processSMS(sms) {
     monthKey   = `${year}-${String(month).padStart(2, "0")}`;
   }
 
-  // Auto-tag from UPI narration (the note you type in GPay / PhonePe)
-  // Raw narration text is never stored — only the matched label (e.g. "Grocery")
   const suggestedTag = parsed.type === "debited" ? narrationToTag(sms.raw) : null;
-
   return { id: sms.id, date: sms.date, bank: sms.bank, monthKey, year, ...parsed, suggestedTag, tag: null };
 }
 
-// ─── Mock SMS feed ──────────────────────────────────────────────────────
+// ── Mock SMS feed ─────────────────────────────────────────────────────────
 const MOCK_SMS_FEED = [
-  // Credited
-  { id: 1,  raw: "₹45,000 credited to Ac xx5678 SALARY from TECHCORP PVT LTD",     date: "Apr 08", bank: "HDFC"  },
+  { id: 1,  raw: "₹45,000 credited to Ac xx5678 SALARY from TECHCORP PVT LTD",     date: "Apr 05", bank: "HDFC"  },
   { id: 2,  raw: "₹15,000 credited to Ac xx5678 NEFT from RAHUL SHARMA",            date: "Apr 14", bank: "HDFC"  },
   { id: 3,  raw: "₹8,000 credited to Ac xx5678 IMPS from PRIYA MEHTA",              date: "Apr 12", bank: "SBI"   },
-  { id: 4,  raw: "₹5,000 credited to Ac xx5678 UPI from AMIT KUMAR",                date: "Apr 10", bank: "ICICI" },
-  // UHO (large, non-brand)
   { id: 5,  raw: "₹12,000 debited from Ac xx5678. Info: IndiGo Flight Booking",     date: "Apr 09", bank: "HDFC"  },
-  { id: 6,  raw: "₹6,500 debited from Ac xx5678. Info: Monthly Rent Apr",           date: "Apr 07", bank: "ICICI" },
+  { id: 6,  raw: "₹6,500 debited from Ac xx5678. Info: Monthly Rent Apr",           date: "Apr 01", bank: "ICICI" },
   { id: 7,  raw: "₹3,500 debited from Ac xx5678. Info: Myntra Fashion Order",       date: "Apr 11", bank: "HDFC"  },
   { id: 8,  raw: "₹2,500 debited from Ac xx5678. Info: Amazon Shopping",            date: "Apr 14", bank: "HDFC"  },
-  // QuickCart brands
   { id: 9,  raw: "₹450 debited from Ac xx5678. Info: Swiggy Order #7892",           date: "Apr 13", bank: "HDFC"  },
   { id: 10, raw: "₹380 debited from Ac xx5678. Info: Zomato Order #2312",           date: "Apr 12", bank: "HDFC"  },
   { id: 11, raw: "₹1,850 debited from Ac xx5678. Info: BigBasket Grocery",          date: "Apr 11", bank: "HDFC"  },
@@ -274,140 +200,209 @@ const MOCK_SMS_FEED = [
   { id: 14, raw: "₹1,200 debited from Ac xx5678. Info: Amazon Fresh Order",         date: "Apr 08", bank: "HDFC"  },
   { id: 15, raw: "₹750 debited from Ac xx5678. Info: District Movie Booking",       date: "Apr 07", bank: "ICICI" },
   { id: 16, raw: "₹320 debited from Ac xx5678. Info: Swiggy Instamart",             date: "Apr 06", bank: "SBI"   },
-  // Misc (small, non-brand)
   { id: 17, raw: "₹900 debited from Ac xx5678. Info: Netflix Subscription",         date: "Apr 10", bank: "HDFC"  },
   { id: 18, raw: "₹500 debited from Ac xx5678. Info: Jio Recharge",                 date: "Apr 07", bank: "SBI"   },
   { id: 19, raw: "₹350 debited from Ac xx5678. Info: HP Petrol Fill-up",            date: "Apr 09", bank: "SBI"   },
   { id: 20, raw: "₹200 debited from Ac xx5678. Info: Starbucks Coffee",             date: "Apr 11", bank: "SBI"   },
-  // UPI with narration — auto-tag from GPay note
   { id: 31, raw: "₹650 debited from Ac xx5678. Info: UPI/987654321/grocery/merchant@okicici. Avl Bal:₹8,200", date: "Apr 13", bank: "HDFC" },
   { id: 32, raw: "₹4,200 debited from Ac xx5678. Info: UPI/876543219/travel/irctc@okaxis. Avl Bal:₹4,000",    date: "Apr 08", bank: "HDFC" },
   { id: 33, raw: "₹800 debited from Ac xx5678. Info: UPI/765432198/medical/apollo@okicici. Avl Bal:₹3,200",   date: "Apr 10", bank: "SBI"  },
   { id: 34, raw: "₹1,100 debited from Ac xx5678 Remarks: rent payment Apr. UPI Ref:654321987",                date: "Apr 01", bank: "ICICI"},
-  { id: 35, raw: "₹350 debited from Ac xx5678. Info: UPI/543219876/fuel/hpcl@okaxis. Avl Bal:₹2,850",        date: "Apr 11", bank: "HDFC" },
-  // Credit Card transactions
   { id: 21, raw: "Rs.3,500.00 debited from your HDFC Credit Card ending 1234 at IndiGo. Apr 08",   date: "Apr 08", bank: "HDFC"  },
   { id: 22, raw: "₹850 spent on SBI Credit Card XX5678 at Swiggy on 12-Apr-26",                    date: "Apr 12", bank: "SBI"   },
   { id: 23, raw: "Alert: Transaction of ₹1,200 on your Axis Bank Credit Card ending 9012 at Amazon", date: "Apr 11", bank: "Axis"  },
   { id: 24, raw: "Rs.450.00 charged on ICICI Bank Credit Card XX3456 at Zomato. Apr 10",            date: "Apr 10", bank: "ICICI" },
   { id: 25, raw: "Your Kotak Credit Card has been used for Rs.6,200 at Apple Store. Apr 09",        date: "Apr 09", bank: "Kotak" },
-  // Investments — Groww, Zerodha, SIP
   { id: 41, raw: "₹5,000 debited from Ac xx5678. Info: Groww Mutual Fund SIP Apr",        date: "Apr 03", bank: "HDFC"  },
   { id: 42, raw: "₹2,500 debited from Ac xx5678. Info: Zerodha Broking Charges",          date: "Apr 07", bank: "ICICI" },
   { id: 43, raw: "₹10,000 debited from Ac xx5678. Info: Groww - Nifty 50 Index Fund SIP", date: "Apr 01", bank: "SBI"   },
   { id: 44, raw: "₹3,000 debited from Ac xx5678. Info: INDmoney US Stock Purchase",       date: "Apr 10", bank: "HDFC"  },
-  // Refunds / Cashback
-  { id: 45, raw: "₹850 refund credited to Ac xx5678 for Swiggy Order #7892",             date: "Apr 15", bank: "HDFC"  },
-  { id: 46, raw: "₹200 cashback credited to Ac xx5678 from Axis Bank Credit Card",       date: "Apr 13", bank: "Axis"  },
-  { id: 47, raw: "₹1,200 reversal credited to Ac xx5678 for Amazon return",              date: "Apr 11", bank: "HDFC"  },
-  // Investments via NACH/SIP (no brand name — tests SIP fallback)
-  { id: 48, raw: "₹5,000 debited from Ac xx5678 via NACH for SIP mandate auto-debit",   date: "Apr 05", bank: "SBI"   },
-  // BLOCKED — OTP messages (prove filter works)
+  { id: 48, raw: "₹5,000 debited from Ac xx5678 via NACH for SIP mandate auto-debit",     date: "Apr 05", bank: "SBI"   },
+  { id: 45, raw: "₹850 refund credited to Ac xx5678 for Swiggy Order #7892",              date: "Apr 15", bank: "HDFC"  },
+  { id: 46, raw: "₹200 cashback credited to Ac xx5678 from Axis Bank Credit Card",        date: "Apr 13", bank: "Axis"  },
+  { id: 47, raw: "₹1,200 reversal credited to Ac xx5678 for Amazon return",               date: "Apr 11", bank: "HDFC"  },
+  // BLOCKED — OTP messages
   { id: 101, raw: "748392 is your OTP for HDFC NetBanking. Do not share with anyone.", date: "Apr 14", bank: "HDFC"  },
   { id: 102, raw: "Your ICICI Bank OTP is 291047. Valid for 10 minutes.",              date: "Apr 13", bank: "ICICI" },
   { id: 103, raw: "SBI: Your login OTP is 503821. Do not share this code.",            date: "Apr 12", bank: "SBI"   },
-  { id: 104, raw: "PIN for your debit card ending 5678 has been set. Do not share.",   date: "Apr 11", bank: "HDFC"  },
-  { id: 105, raw: "Two-factor authentication code: 884712. Expires in 5 min.",         date: "Apr 10", bank: "SBI"   },
 ];
 
-// ─── Helpers ─────────────────────────────────────────────────────────────
-const fmt = n => `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
-
-const catLabel = c => ({
-  income: "Income", miscellaneous: "Misc",
-  quickcart: "QuickCart", creditcard: "CC", investments: "Invest",
-}[c] || c);
-
-const catStyle = c => ({
-  income:        { color: INCOME_COLOR, background: "rgba(5,150,105,.1)"   },
-  miscellaneous: { color: MISC_COLOR,   background: "rgba(99,102,241,.1)"  },
-  quickcart:     { color: QC_COLOR,     background: "rgba(225,29,72,.1)"   },
-  creditcard:    { color: CC_COLOR,     background: "rgba(124,58,237,.1)"  },
-  investments:   { color: INV_COLOR,    background: "rgba(8,145,178,.1)"   },
-}[c]);
-
-const CAT_COLORS = {
-  income: INCOME_COLOR, miscellaneous: MISC_COLOR,
-  quickcart: QC_COLOR,  creditcard: CC_COLOR, investments: INV_COLOR,
+// ══════════════════════════════════════════════════════════════════════════
+//  DESIGN TOKENS  (from Claude Design handoff)
+// ══════════════════════════════════════════════════════════════════════════
+const D = {
+  cream:       "#f5f3ef",
+  cream2:      "#efece5",
+  cream3:      "#e8e4db",
+  ink:         "#141310",
+  ink2:        "#2a2823",
+  ink3:        "#6e6a60",
+  ink4:        "#9c978b",
+  line:        "#e3dfd4",
+  line2:       "#d9d4c6",
+  white:       "#ffffff",
+  income:      "#1f8a5c",
+  incomeSoft:  "#e4f2ea",
+  cc:          "#6b3fd4",
+  ccSoft:      "#ece6fa",
+  quick:       "#d43764",
+  quickSoft:   "#fae0e8",
+  invest:      "#1d7a99",
+  investSoft:  "#dff0f5",
+  misc:        "#4f55c7",
+  miscSoft:    "#e5e6f6",
+  rLg:         24,
+  rMd:         18,
+  rSm:         12,
+  card:        "0 1px 0 rgba(20,19,16,.04), 0 1px 2px rgba(20,19,16,.04)",
+  raised:      "0 2px 0 rgba(20,19,16,.03), 0 8px 24px rgba(20,19,16,.06)",
 };
 
-const CustomTooltip = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null;
+// Category display map
+const CATS = {
+  income:  { name: "Income",        emoji: "💚", color: D.income,  soft: D.incomeSoft },
+  cc:      { name: "Credit Card",   emoji: "💳", color: D.cc,      soft: D.ccSoft     },
+  quick:   { name: "QuickCart",     emoji: "🛒", color: D.quick,   soft: D.quickSoft  },
+  invest:  { name: "Investments",   emoji: "📈", color: D.invest,  soft: D.investSoft },
+  misc:    { name: "Miscellaneous", emoji: "🏷️", color: D.misc,    soft: D.miscSoft   },
+};
+
+// Internal category key → display key
+const CK = k => ({ income:"income", creditcard:"cc", quickcart:"quick", investments:"invest", miscellaneous:"misc" }[k] || "misc");
+
+// Indian number formatter (supports compact: 1.2L, 45k)
+const fmt = (n, compact = false) => {
+  if (compact && Math.abs(n) >= 100000) return "₹" + (n/100000).toFixed(1).replace(/\.0$/,"") + "L";
+  if (compact && Math.abs(n) >= 1000)   return "₹" + (n/1000).toFixed(1).replace(/\.0$/,"")   + "k";
+  const abs = Math.round(Math.abs(n)).toString();
+  const last3 = abs.slice(-3), rest = abs.slice(0,-3);
+  const grouped = rest ? rest.replace(/\B(?=(\d{2})+(?!\d))/g, ",") + "," + last3 : last3;
+  return (n < 0 ? "-" : "") + "₹" + grouped;
+};
+
+// ── Category icon ─────────────────────────────────────────────────────────
+const CatIcon = ({ catKey, size = 40 }) => {
+  const c = CATS[CK(catKey)] || CATS.misc;
   return (
-    <div style={{ background: CARD_BG, border: `1px solid ${BORDER}`, borderRadius: 8,
-      padding: "6px 12px", fontSize: 12, color: T_BRIGHT, boxShadow: SHADOW }}>
-      {label && <p style={{ color: T_DIM, margin: "0 0 2px", fontSize: 11 }}>{label}</p>}
-      <p style={{ margin: 0, fontWeight: 700 }}>{fmt(payload[0].value)}</p>
+    <div style={{ width: size, height: size, borderRadius: Math.round(size * 0.28),
+      background: c.soft, display: "flex", alignItems: "center", justifyContent: "center",
+      fontSize: Math.round(size * 0.46), flexShrink: 0 }}>
+      {c.emoji}
     </div>
   );
 };
 
-const StatCard = ({ label, value, accent, Icon, sub }) => (
-  <div style={{ background: `${accent}18`, border: `1px solid ${accent}35`,
-    borderRadius: 16, padding: "14px 16px", flex: 1 }}>
-    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-      <Icon size={14} color={accent} />
-      <span style={{ color: accent, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</span>
+// Merchant letter avatar
+const MerchantAvatar = ({ merchant, catKey, size = 42 }) => {
+  const c = CATS[CK(catKey)] || CATS.misc;
+  return (
+    <div style={{ width: size, height: size, borderRadius: Math.round(size * 0.28),
+      background: c.soft, display: "flex", alignItems: "center", justifyContent: "center",
+      fontSize: Math.round(size * 0.42), fontWeight: 700, color: c.color, flexShrink: 0,
+      fontFamily: "'Inter Tight', sans-serif", userSelect: "none" }}>
+      {((merchant || "?")[0]).toUpperCase()}
     </div>
-    <p style={{ color: T_BRIGHT, fontSize: 18, fontWeight: 700, margin: "0 0 2px" }}>{value}</p>
-    {sub && <p style={{ color: T_MUTED, fontSize: 10, margin: 0 }}>{sub}</p>}
-  </div>
+  );
+};
+
+// Bottom sheet
+const Sheet = ({ open, onClose, title, children }) => (
+  <>
+    <div onClick={onClose} style={{
+      position: "absolute", inset: 0, background: "rgba(20,19,16,.4)",
+      opacity: open ? 1 : 0, pointerEvents: open ? "auto" : "none",
+      transition: "opacity 240ms ease", zIndex: 50,
+    }}/>
+    <div style={{
+      position: "absolute", left: 0, right: 0, bottom: 0,
+      background: D.cream, borderRadius: "28px 28px 0 0",
+      transform: open ? "translateY(0)" : "translateY(100%)",
+      transition: "transform 340ms cubic-bezier(.2,.8,.2,1)",
+      zIndex: 51, maxHeight: "88%", display: "flex", flexDirection: "column",
+      overflow: "hidden", boxShadow: "0 -8px 48px rgba(0,0,0,.14)",
+    }}>
+      <div style={{ width: 40, height: 4, background: D.line2, borderRadius: 2, margin: "12px auto 0", flexShrink: 0 }}/>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+        padding: "14px 20px 10px", flexShrink: 0 }}>
+        <div style={{ fontSize: 17, fontWeight: 700, color: D.ink, letterSpacing: "-0.01em" }}>{title}</div>
+        <button onClick={onClose} style={{ width: 30, height: 30, borderRadius: 9,
+          background: D.cream2, border: `1px solid ${D.line}`, cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 14, color: D.ink3 }}>✕</button>
+      </div>
+      <div style={{ overflowY: "auto", padding: "4px 20px 32px", scrollbarWidth: "none" }}>
+        {children}
+      </div>
+    </div>
+  </>
 );
 
 // ══════════════════════════════════════════════════════════════════════════
 //  MAIN APP
 // ══════════════════════════════════════════════════════════════════════════
 export default function App() {
-  const [tab,            setTab]            = useState("home");
-  const [tagMap,         setTagMap]         = useState({});
-  const [activeTagTxn,   setActiveTagTxn]   = useState(null);
-  const [customTagInput, setCustomTagInput] = useState("");
-  const [userTags,       setUserTags]       = useState(DEFAULT_TAGS);
-  const [showTagMgr,     setShowTagMgr]     = useState(false);
-  const [showPrivacy,    setShowPrivacy]    = useState(false);
-  const [showSalary,     setShowSalary]     = useState(false);
-  const [chartMode,      setChartMode]      = useState("pie");
-  const [qcChartMode,    setQcChartMode]    = useState("bar");
-  const [newGlobalTag,   setNewGlobalTag]   = useState("");
-  const [filters,        setFilters]        = useState({ type: "all", category: "all" });
-  const [smsFeed,        setSmsFeed]        = useState(MOCK_SMS_FEED);
-  const [smsLoading,     setSmsLoading]     = useState(true);
-  // Salary config
-  const [salary,         setSalary]         = useState({ amount: "", day: 1, label: "Salary" });
-  const [salaryInput,    setSalaryInput]    = useState({ amount: "", day: "1", label: "Salary" });
+  // ── State ───────────────────────────────────────────────────────────────
+  const [tab,          setTab]          = useState("home");
+  const [tagMap,       setTagMap]       = useState({});
+  const [activeTagTxn, setActiveTagTxn] = useState(null);
+  const [tagDraft,     setTagDraft]     = useState("");
+  const [userTags,     setUserTags]     = useState([
+    "Food","Groceries","Rent","Bills","Transit","Fuel","SIP",
+    "Subscriptions","Health","Shopping","Travel","Entertainment",
+  ]);
+  const [showTagMgr,   setShowTagMgr]   = useState(false);
+  const [showPrivacy,  setShowPrivacy]  = useState(false);
+  const [showSalary,   setShowSalary]   = useState(false);
+  const [showDrill,    setShowDrill]    = useState(null);
+  const [smsFeed,      setSmsFeed]      = useState(MOCK_SMS_FEED);
+  const [onboarded,    setOnboarded]    = useState(false);
+  const [obStep,       setObStep]       = useState(0); // 0-2 carousel, 3 salary
+  const [salary,       setSalary]       = useState({ amount: "", day: 1 });
+  const [salaryInput,  setSalaryInput]  = useState({ amount: "", day: "1" });
+  const [obAmt,        setObAmt]        = useState("");
+  const [obDay,        setObDay]        = useState("1");
 
-  // ── Load real SMS on mount (falls back to mock data in browser/dev) ───
+  // ── Font injection ──────────────────────────────────────────────────────
+  useEffect(() => {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800;900&display=swap";
+    document.head.appendChild(link);
+    const style = document.createElement("style");
+    style.textContent = `
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      .ns::-webkit-scrollbar { display: none; }
+      .ns { scrollbar-width: none; }
+      @keyframes fadeIn { from { opacity:0; transform:translateY(4px) } to { opacity:1; transform:translateY(0) } }
+      @keyframes slideUp { from { opacity:0; transform:translateY(8px) } to { opacity:1; transform:translateY(0) } }
+    `;
+    document.head.appendChild(style);
+  }, []);
+
+  // ── Load real SMS ───────────────────────────────────────────────────────
   useEffect(() => {
     SmsNative.getMessages()
       .then(({ messages }) => {
         const feed = messages.map((m, i) => {
           const d = new Date(Number(m.date));
           return {
-            id:        i,
-            raw:       m.body,
-            timestamp: Number(m.date),
-            // Always "Apr 08" format so month parser works correctly
-            date: `${MONTH_NAMES[d.getMonth()]} ${String(d.getDate()).padStart(2, "0")}`,
+            id: i, raw: m.body, timestamp: Number(m.date),
+            date: `${MONTH_NAMES[d.getMonth()]} ${String(d.getDate()).padStart(2,"0")}`,
             bank: m.address,
           };
         });
-        // Only replace if we actually got messages
         if (feed.length > 0) setSmsFeed(feed);
       })
-      .catch(() => { /* keep mock data — running in browser or permission denied */ })
-      .finally(() => setSmsLoading(false));
+      .catch(() => {})
   }, []);
 
-  // ── Period state ─────────────────────────────────────────────────────
+  // ── Period state ────────────────────────────────────────────────────────
   const NOW = new Date();
-  const [period,    setPeriod]    = useState("M"); // "D"|"W"|"M"|"3M"|"6M"|"1Y"|"ALL"
+  const [period,    setPeriod]    = useState("M");
   const [viewMonth, setViewMonth] = useState(NOW.getMonth() + 1);
   const [viewYear,  setViewYear]  = useState(NOW.getFullYear());
 
-  const [selectedCat, setSelectedCat] = useState(null);
-  const toggleCat = cat => setSelectedCat(p => p === cat ? null : cat);
-
-  const shiftMonth = (dir) => {
+  const shiftMonth = dir => {
     setViewMonth(m => {
       let nm = m + dir;
       if (nm < 1)  { setViewYear(y => y - 1); return 12; }
@@ -416,7 +411,7 @@ export default function App() {
     });
   };
 
-  // ── Security pipeline ─────────────────────────────────────────────────
+  // ── SMS processing pipeline ─────────────────────────────────────────────
   const { txns, blockedCount } = useMemo(() => {
     let blocked = 0;
     const passed = smsFeed.reduce((acc, sms) => {
@@ -428,496 +423,516 @@ export default function App() {
   }, [smsFeed]);
 
   const taggedTxns = useMemo(
-    // Manual tag wins; fall back to GPay narration auto-tag; then null
     () => txns.map(t => ({ ...t, tag: tagMap[t.id] || t.suggestedTag || null })),
     [txns, tagMap]
   );
 
-  // ── Salary injection — virtual income entry per month ─────────────────
+  // ── Salary injection ────────────────────────────────────────────────────
   const salaryTxns = useMemo(() => {
     if (!salary.amount || Number(salary.amount) <= 0) return [];
-    const amt  = Number(salary.amount);
-    const day  = String(salary.day).padStart(2, "0");
-    // Inject for current month + any month we have txns for
+    const amt = Number(salary.amount);
+    const day = String(salary.day).padStart(2,"0");
     const months = new Set(taggedTxns.map(t => t.monthKey));
     const mk = (y,m) => `${y}-${String(m).padStart(2,"0")}`;
     months.add(mk(NOW.getFullYear(), NOW.getMonth()+1));
     return [...months].map(mKey => ({
-      id: `sal-${mKey}`, date: `${MONTH_NAMES[parseInt(mKey.split("-")[1])-1]} ${day}`,
-      bank: salary.label || "Salary", monthKey: mKey,
-      year: parseInt(mKey.split("-")[0]), amount: amt, type: "credited",
-      category: "income", brand: null, isCreditCard: false, isRefund: false,
+      id: `sal-${mKey}`,
+      date: `${MONTH_NAMES[parseInt(mKey.split("-")[1])-1]} ${day}`,
+      bank: "Salary", monthKey: mKey, year: parseInt(mKey.split("-")[0]),
+      amount: amt, type: "credited", category: "income",
+      brand: null, isCreditCard: false, isRefund: false,
       suggestedTag: "Salary", tag: "Salary", isSalary: true,
     }));
   }, [salary, taggedTxns]);
 
   const allTxns = useMemo(() => {
-    // Merge salary + real txns, deduplicate by id
     const map = {};
     [...taggedTxns, ...salaryTxns].forEach(t => { map[t.id] = t; });
-    return Object.values(map).sort((a, b) => {
+    return Object.values(map).sort((a,b) => {
       if (a.monthKey !== b.monthKey) return b.monthKey.localeCompare(a.monthKey);
-      return (b.id > a.id ? 1 : -1);
+      return b.id > a.id ? 1 : -1;
     });
   }, [taggedTxns, salaryTxns]);
 
-  // ── Period filter ─────────────────────────────────────────────────────
+  // ── Period filter ───────────────────────────────────────────────────────
   const periodTxns = useMemo(() => {
-    const mk = (y, m) => `${y}-${String(m).padStart(2, "0")}`;
+    const mk = (y,m) => `${y}-${String(m).padStart(2,"0")}`;
     const todayStr = `${MONTH_NAMES[NOW.getMonth()]} ${String(NOW.getDate()).padStart(2,"0")}`;
-
     if (period === "ALL") return allTxns;
     if (period === "D")   return allTxns.filter(t => t.monthKey === mk(NOW.getFullYear(), NOW.getMonth()+1) && t.date === todayStr);
     if (period === "M")   return allTxns.filter(t => t.monthKey === mk(viewYear, viewMonth));
     if (period === "1Y")  return allTxns.filter(t => t.year === NOW.getFullYear());
-    // W / 3M / 6M — cut off by monthKey
     const monthsBack = period === "W" ? 0 : period === "3M" ? 3 : 6;
     const d = new Date(NOW.getFullYear(), NOW.getMonth() - monthsBack, 1);
-    const cutoff = mk(d.getFullYear(), d.getMonth() + 1);
-    return allTxns.filter(t => t.monthKey >= cutoff);
+    return allTxns.filter(t => t.monthKey >= mk(d.getFullYear(), d.getMonth()+1));
   }, [allTxns, period, viewYear, viewMonth]);
 
-  // ── Aggregates (period-scoped) ────────────────────────────────────────
-  const totalCredited  = useMemo(() => periodTxns.filter(t => t.type === "credited").reduce((s, t) => s + t.amount, 0), [periodTxns]);
-  const totalDebited   = useMemo(() => periodTxns.filter(t => t.type === "debited").reduce((s, t) => s + t.amount, 0), [periodTxns]);
-  const totalRefunds   = useMemo(() => periodTxns.filter(t => t.isRefund).reduce((s, t) => s + t.amount, 0), [periodTxns]);
-  const totalMisc      = useMemo(() => periodTxns.filter(t => t.category === "miscellaneous").reduce((s, t) => s + t.amount, 0), [periodTxns]);
-  const totalQuickCart = useMemo(() => periodTxns.filter(t => t.category === "quickcart").reduce((s, t) => s + t.amount, 0), [periodTxns]);
-  const totalCC        = useMemo(() => periodTxns.filter(t => t.category === "creditcard").reduce((s, t) => s + t.amount, 0), [periodTxns]);
-  const totalInv       = useMemo(() => periodTxns.filter(t => t.category === "investments").reduce((s, t) => s + t.amount, 0), [periodTxns]);
+  // ── Aggregates ──────────────────────────────────────────────────────────
+  const totalIncome  = useMemo(() => periodTxns.filter(t => t.type === "credited" && !t.isRefund).reduce((s,t) => s+t.amount, 0), [periodTxns]);
+  const totalDebited = useMemo(() => periodTxns.filter(t => t.type === "debited").reduce((s,t) => s+t.amount, 0), [periodTxns]);
+  const totalRefunds = useMemo(() => periodTxns.filter(t => t.isRefund).reduce((s,t) => s+t.amount, 0), [periodTxns]);
+  const totalCC      = useMemo(() => periodTxns.filter(t => t.category === "creditcard").reduce((s,t) => s+t.amount, 0), [periodTxns]);
+  const totalQuick   = useMemo(() => periodTxns.filter(t => t.category === "quickcart").reduce((s,t) => s+t.amount, 0), [periodTxns]);
+  const totalInv     = useMemo(() => periodTxns.filter(t => t.category === "investments").reduce((s,t) => s+t.amount, 0), [periodTxns]);
+  const totalMisc    = useMemo(() => periodTxns.filter(t => t.category === "miscellaneous").reduce((s,t) => s+t.amount, 0), [periodTxns]);
 
-  // ── Chart data ────────────────────────────────────────────────────────
-  const barData = [
-    { name: "Credited",  amt: totalCredited,  fill: INCOME_COLOR },
-    { name: "Debited",   amt: totalDebited,   fill: DEBIT_COLOR  },
-  ];
-
-  const pieData = useMemo(() => [
-    { name: "Income",      value: totalCredited,  color: INCOME_COLOR },
-    { name: "CC",          value: totalCC,        color: CC_COLOR     },
-    { name: "QuickCart",   value: totalQuickCart, color: QC_COLOR     },
-    { name: "Investments", value: totalInv,       color: INV_COLOR    },
-    { name: "Misc",        value: totalMisc,      color: MISC_COLOR   },
-  ].filter(d => d.value > 0), [totalCredited, totalCC, totalQuickCart, totalInv, totalMisc]);
-
-  // Drill-down txns for selected category card
-  const drillTxns = useMemo(() =>
-    selectedCat ? periodTxns.filter(t => t.category === selectedCat) : [],
-    [periodTxns, selectedCat]
-  );
-
-  // Yearly insight — top category, top brand, biggest single spend
-  const yearlyInsight = useMemo(() => {
-    if (!["1Y","ALL"].includes(period) || periodTxns.length === 0) return null;
-    const debits = periodTxns.filter(t => t.type === "debited");
-    const cats = { quickcart: 0, miscellaneous: 0, creditcard: 0, investments: 0 };
-    debits.forEach(t => { if (cats[t.category] !== undefined) cats[t.category] += t.amount; });
-    const topCat = Object.entries(cats).sort((a,b) => b[1]-a[1])[0];
-    const topCatLabel = { quickcart: "QuickCart", miscellaneous: "Misc", creditcard: "Credit Card", investments: "Investments" }[topCat[0]];
-
-    const brandMap = {};
-    debits.filter(t => t.brand).forEach(t => { brandMap[t.brand] = (brandMap[t.brand]||0) + t.amount; });
-    const topBrand = Object.entries(brandMap).sort((a,b) => b[1]-a[1])[0];
-
-    const biggestSpend = debits.reduce((max, t) => t.amount > (max?.amount||0) ? t : max, null);
-
-    const monthMap = {};
-    debits.forEach(t => { monthMap[t.monthKey] = (monthMap[t.monthKey]||0) + t.amount; });
-    const heaviestMonth = Object.entries(monthMap).sort((a,b) => b[1]-a[1])[0];
-    const hmLabel = heaviestMonth ? `${MONTH_NAMES[parseInt(heaviestMonth[0].split("-")[1])-1]}` : null;
-
-    return { topCat: topCatLabel, topCatAmt: topCat[1], topBrand, biggestSpend, heaviestMonth: hmLabel, heaviestAmt: heaviestMonth?.[1] };
-  }, [periodTxns, period]);
-
-  // Brand chart — QuickCart brands breakdown
-  const brandChartData = useMemo(() => {
-    const map = {};
-    periodTxns.filter(t => t.category === "quickcart" && t.brand).forEach(t => {
-      const b = t.brand.charAt(0).toUpperCase() + t.brand.slice(1).toLowerCase()
-        .replace(/\b\w/g, c => c.toUpperCase());
-      map[b] = (map[b] || 0) + t.amount;
-    });
-    return Object.entries(map)
-      .map(([name, amt]) => ({ name, amt }))
-      .sort((a, b) => b.amt - a.amt);
-  }, [taggedTxns]);
-
-  // Tag chart — spending per tag
   const tagChartData = useMemo(() => {
     const map = {};
-    periodTxns.filter(t => t.tag).forEach(t => {
-      map[t.tag] = (map[t.tag] || 0) + t.amount;
-    });
-    return Object.entries(map)
-      .map(([name, amt]) => ({ name, amt }))
-      .sort((a, b) => b.amt - a.amt);
-  }, [taggedTxns]);
+    periodTxns.filter(t => t.tag && t.type === "debited").forEach(t => { map[t.tag] = (map[t.tag]||0)+t.amount; });
+    return Object.entries(map).map(([name,amt]) => ({name,amt})).sort((a,b) => b.amt-a.amt);
+  }, [periodTxns]);
 
-  // ── Actions ───────────────────────────────────────────────────────────
-  const applyTag  = (id, tag) => { setTagMap(p => ({ ...p, [id]: tag })); setActiveTagTxn(null); setCustomTagInput(""); };
-  const removeTag = id        => setTagMap(p => { const n = { ...p }; delete n[id]; return n; });
-  const addGlobalTag = () => {
-    const t = newGlobalTag.trim();
-    if (t && !userTags.includes(t)) setUserTags(p => [...p, t]);
-    setNewGlobalTag("");
-  };
+  const brandChartData = useMemo(() => {
+    const map = {};
+    periodTxns.filter(t => t.category === "quickcart" && t.brand).forEach(t => { map[t.brand] = (map[t.brand]||0)+t.amount; });
+    return Object.entries(map).map(([name,amt]) => ({name,amt})).sort((a,b) => b.amt-a.amt);
+  }, [periodTxns]);
 
-  const chip = (active, color = "#6366f1") => ({
-    padding: "6px 14px", borderRadius: 20, border: `1.5px solid ${active ? color : BORDER}`,
-    cursor: "pointer", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", transition: "all .15s",
-    background: active ? color : CARD_BG, color: active ? "#fff" : T_DIM,
-    boxShadow: active ? `0 2px 8px ${color}40` : "none",
-  });
+  // ── Actions ─────────────────────────────────────────────────────────────
+  const applyTag  = (id, tag) => { setTagMap(p => ({ ...p, [id]: tag })); setActiveTagTxn(null); setTagDraft(""); };
+  const removeTag = id        => setTagMap(p => { const n={...p}; delete n[id]; return n; });
 
-  const S = {
-    section:      { background: CARD_BG, borderRadius: 18, padding: 16, marginBottom: 12,
-                    boxShadow: SHADOW, border: `1px solid ${BORDER}` },
-    sectionTitle: { color: T_DIM, fontSize: 11, fontWeight: 700, margin: "0 0 14px",
-                    textTransform: "uppercase", letterSpacing: 0.8 },
-  };
+  const periodLabel = period === "D" ? "Today"
+    : period === "M"   ? `${MONTH_NAMES[viewMonth-1]} ${viewYear}`
+    : period === "W"   ? "This week"
+    : period === "1Y" || period === "ALL" ? `${viewYear}` : `Last ${period}`;
 
-  // ══════════════════════════════════════════════════════════════════════
-  //  PRIVACY BANNER + MODAL
-  // ══════════════════════════════════════════════════════════════════════
-  const PrivacyBanner = () => (
-    <button onClick={() => setShowPrivacy(true)}
-      style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
-        background: "rgba(8,145,178,.06)", border: "1px solid rgba(8,145,178,.18)",
-        borderRadius: 14, padding: "10px 14px", marginBottom: 14,
-        cursor: "pointer", width: "100%", textAlign: "left" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <ShieldCheck size={14} color={SAFE_COLOR} />
-        <span style={{ color: SAFE_COLOR, fontSize: 11, fontWeight: 700 }}>Privacy Protected</span>
-        <span style={{ color: T_MUTED, fontSize: 11 }}>· {blockedCount} blocked</span>
-      </div>
-      <span style={{ color: T_MUTED, fontSize: 10 }}>tap ›</span>
-    </button>
-  );
+  const PERIODS = ["D","W","M","3M","6M","1Y","ALL"];
+  const F = { fontFamily: "'Inter Tight', 'Inter', system-ui, sans-serif" };
 
-  const PrivacyModal = () => (
-    <div onClick={() => setShowPrivacy(false)}
-      style={{ position: "absolute", inset: 0, background: "rgba(26,20,16,.4)", zIndex: 60,
-        display: "flex", alignItems: "flex-end" }}>
-      <div onClick={e => e.stopPropagation()}
-        style={{ background: CARD_BG, borderRadius: "24px 24px 0 0", width: "100%",
-          padding: "22px 20px 40px", maxHeight: "82%", overflowY: "auto", boxShadow: "0 -8px 40px rgba(0,0,0,.12)" }}>
-        <div style={{ width: 36, height: 4, borderRadius: 99, background: BORDER, margin: "0 auto 20px" }} />
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <ShieldCheck size={20} color={SAFE_COLOR} />
-            <h3 style={{ color: T_BRIGHT, fontSize: 17, fontWeight: 700, margin: 0 }}>Privacy & Security</h3>
-          </div>
-          <button onClick={() => setShowPrivacy(false)}
-            style={{ background: PAGE_BG, border: `1px solid ${BORDER}`, borderRadius: 10, width: 32, height: 32,
-              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <X size={14} color={T_DIM} />
-          </button>
-        </div>
-        {[
-          { icon: "🚫", title: `${blockedCount} sensitive messages blocked`,
-            body: "OTP, PIN, CVV, verification codes, fraud alerts — detected and discarded before any data is read." },
-          { icon: "🔢", title: "Only ₹ amount + type extracted",
-            body: "Parser reads: rupee amount, credited/debited keyword, and known brand name. Names, account numbers, UPI IDs never stored." },
-          { icon: "📵", title: "Zero network calls",
-            body: "No HTTP requests, no analytics SDK. All processing runs on your device." },
-          { icon: "🗑️", title: "No persistent storage",
-            body: "Data lives in app memory only — cleared when you close the app." },
-        ].map((item, i, arr) => (
-          <div key={i} style={{ marginBottom: 14, paddingBottom: 14,
-            borderBottom: i < arr.length - 1 ? `1px solid ${BORDER}` : "none" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-              <span style={{ fontSize: 15 }}>{item.icon}</span>
-              <p style={{ color: T_BRIGHT, fontSize: 13, fontWeight: 600, margin: 0 }}>{item.title}</p>
-            </div>
-            <p style={{ color: T_DIM, fontSize: 12, lineHeight: 1.6, margin: 0, paddingLeft: 27 }}>{item.body}</p>
-          </div>
-        ))}
-      </div>
+  // ── Period chips ─────────────────────────────────────────────────────────
+  const PeriodChips = () => (
+    <div className="ns" style={{ display:"flex", gap:4, padding:4, background:D.cream2,
+      borderRadius:999, border:`1px solid ${D.line}`, overflowX:"auto" }}>
+      {PERIODS.map(p => (
+        <button key={p} onClick={() => setPeriod(p)} style={{
+          height:30, minWidth:34, padding:"0 10px", borderRadius:999,
+          fontSize:12, fontWeight:700, letterSpacing:"0.02em", flexShrink:0,
+          background: period===p ? D.ink : "transparent",
+          color:      period===p ? D.cream : D.ink3,
+          border:"none", cursor:"pointer", transition:"all 160ms ease",
+        }}>{p}</button>
+      ))}
     </div>
   );
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  ONBOARDING
+  // ══════════════════════════════════════════════════════════════════════
+  const obSteps = [
+    {
+      n: "STEP 01", title: "We read your bank SMS",
+      body: "Nothing else. No banking login, no account linking, no cloud upload. Your inbox stays yours.",
+    },
+    {
+      n: "STEP 02", title: "Auto-sorted into 5 buckets",
+      body: "Swiggy goes to QuickCart. Zerodha to Investments. Credit-card payments separate themselves. Override anything, any time.",
+    },
+    {
+      n: "STEP 03", title: "Tag. Review. Done.",
+      body: "Add tags like #Food or #Rent. See where your money actually went — no spreadsheets, no manual entry.",
+    },
+  ];
+
+  if (!onboarded) {
+    // Salary setup step
+    if (obStep === 3) {
+      return (
+        <div style={{ maxWidth:430, margin:"0 auto", height:"100vh", background:D.cream, overflow:"hidden", ...F }}>
+          <div style={{ height:"100%", display:"flex", flexDirection:"column" }}>
+            <div style={{ padding:"56px 24px 0" }}>
+              <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.12em", color:D.ink4, textTransform:"uppercase", marginBottom:8 }}>
+                ALMOST THERE
+              </div>
+              <div style={{ fontSize:30, fontWeight:800, lineHeight:1.1, color:D.ink, letterSpacing:"-0.02em", marginBottom:10 }}>
+                When does your salary land?
+              </div>
+              <div style={{ fontSize:15, color:D.ink3, fontWeight:500, lineHeight:1.55 }}>
+                We'll add it as income automatically each month. You can update this any time.
+              </div>
+            </div>
+
+            <div style={{ padding:"28px 24px 0", display:"flex", flexDirection:"column", gap:16, flex:1 }}>
+              {/* Amount */}
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                <label style={{ fontSize:11, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", color:D.ink3 }}>
+                  Monthly salary
+                </label>
+                <div style={{ position:"relative" }}>
+                  <span style={{ position:"absolute", left:16, top:"50%", transform:"translateY(-50%)",
+                    fontSize:20, fontWeight:700, color:D.ink3 }}>₹</span>
+                  <input type="number" value={obAmt} onChange={e => setObAmt(e.target.value)}
+                    placeholder="0" inputMode="numeric"
+                    style={{ width:"100%", height:68, paddingLeft:40, paddingRight:16,
+                      border:`1.5px solid ${obAmt ? D.ink : D.line}`, borderRadius:16,
+                      background:D.white, fontSize:30, fontWeight:800, color:D.ink,
+                      outline:"none", ...F }}/>
+                </div>
+              </div>
+              {/* Payday */}
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                <label style={{ fontSize:11, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", color:D.ink3 }}>
+                  Payday — day of month
+                </label>
+                <input type="number" min="1" max="31" value={obDay} onChange={e => setObDay(e.target.value)}
+                  placeholder="1" inputMode="numeric"
+                  style={{ height:52, padding:"0 16px", border:`1.5px solid ${D.line}`, borderRadius:14,
+                    background:D.white, fontSize:17, fontWeight:600, color:D.ink, outline:"none", ...F }}/>
+              </div>
+              {/* Preview */}
+              {obAmt > 0 && (
+                <div style={{ padding:"14px 16px", background:D.incomeSoft, borderRadius:14 }}>
+                  <div style={{ fontSize:13, color:D.ink, fontWeight:500 }}>
+                    <span style={{ fontWeight:800, color:D.income }}>{fmt(Number(obAmt))}</span>
+                    {" "}will be added as income on the{" "}
+                    <span style={{ fontWeight:700 }}>{obDay||1}{["st","nd","rd"][((obDay||1)-1)%10]||"th"}</span>
+                    {" "}of each month
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ padding:"20px 24px 44px", display:"flex", gap:10 }}>
+              <button onClick={() => setOnboarded(true)}
+                style={{ height:52, padding:"0 22px", background:"transparent",
+                  border:`1px solid ${D.line2}`, borderRadius:14, color:D.ink3,
+                  fontSize:14, fontWeight:600, cursor:"pointer", ...F }}>
+                Skip
+              </button>
+              <button onClick={() => {
+                  if (Number(obAmt) > 0) {
+                    setSalary({ amount: obAmt, day: Number(obDay)||1 });
+                    setSalaryInput({ amount: obAmt, day: obDay });
+                  }
+                  setOnboarded(true);
+                }}
+                style={{ flex:1, height:52, background:D.ink, color:D.cream, border:"none",
+                  borderRadius:14, fontSize:15, fontWeight:700, cursor:"pointer", ...F }}>
+                {obAmt > 0 ? "Save & Start →" : "Skip for now →"}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Info carousel steps 0-2
+    const s = obSteps[obStep];
+    return (
+      <div style={{ maxWidth:430, margin:"0 auto", height:"100vh", background:D.cream, overflow:"hidden", ...F }}>
+        <div style={{ height:"100%", display:"flex", flexDirection:"column" }}>
+          {/* Progress + skip */}
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"52px 24px 0" }}>
+            <div style={{ display:"flex", gap:6 }}>
+              {obSteps.map((_,i) => (
+                <div key={i} style={{
+                  width: i===obStep?24:6, height:6, borderRadius:3,
+                  background: i<=obStep ? D.ink : D.line2,
+                  transition:"all 300ms cubic-bezier(.2,.8,.2,1)",
+                }}/>
+              ))}
+            </div>
+            <button onClick={() => setObStep(3)}
+              style={{ fontSize:13, fontWeight:600, color:D.ink3, background:"none", border:"none", cursor:"pointer" }}>
+              Skip
+            </button>
+          </div>
+
+          {/* Visuals */}
+          <div style={{ flex:1, padding:"32px 24px 0" }}>
+            {obStep === 0 && (
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                <div style={{ background:D.white, borderRadius:18, padding:"18px", border:`1px solid ${D.line}` }}>
+                  <div style={{ fontSize:10, color:D.ink4, fontWeight:700, letterSpacing:"0.1em", marginBottom:6 }}>HDFCBK · 14:22</div>
+                  <div style={{ fontSize:13, color:D.ink2, lineHeight:1.5 }}>
+                    Spent <strong>Rs.486.00</strong> at SWIGGY on 18-Apr using your debit card ending 4417.
+                  </div>
+                </div>
+                <div style={{ display:"flex", alignItems:"center", justifyContent:"flex-end" }}>
+                  <div style={{ padding:"10px 16px", background:D.ink, borderRadius:14, display:"flex", alignItems:"center", gap:8 }}>
+                    <span style={{ color:D.incomeSoft, fontSize:13, fontWeight:700 }}>✓</span>
+                    <span style={{ color:D.cream, fontSize:13, fontWeight:600 }}>₹486 · QuickCart</span>
+                  </div>
+                </div>
+              </div>
+            )}
+            {obStep === 1 && (
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                {["cc","quick","invest","misc"].map((k,i) => {
+                  const c = CATS[k];
+                  const amts = {cc:"₹12.4k",quick:"₹9.6k",invest:"₹22.5k",misc:"₹34.2k"};
+                  return (
+                    <div key={k} style={{ display:"flex", alignItems:"center", gap:14,
+                      padding:"13px 16px", background:D.white, borderRadius:16, border:`1px solid ${D.line}` }}>
+                      <div style={{ width:38, height:38, borderRadius:11, background:c.soft,
+                        display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 }}>{c.emoji}</div>
+                      <div style={{ flex:1, fontSize:14, fontWeight:600, color:D.ink }}>{c.name}</div>
+                      <div style={{ fontSize:16, fontWeight:700, color:D.ink }}>{amts[k]}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {obStep === 2 && (
+              <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+                {["Food","Groceries","Rent","SIP","Bills","Fuel","Transit","Subscriptions","Health"].map(t => (
+                  <span key={t} style={{ padding:"8px 14px", borderRadius:999,
+                    background:D.white, border:`1px solid ${D.line}`,
+                    fontSize:13, fontWeight:600, color:D.ink2 }}>#{t}</span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Copy */}
+          <div style={{ padding:"24px 24px 0" }}>
+            <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.12em", color:D.ink4, textTransform:"uppercase" }}>{s.n}</div>
+            <div style={{ fontSize:30, fontWeight:800, lineHeight:1.1, marginTop:8, color:D.ink, letterSpacing:"-0.02em" }}>{s.title}</div>
+            <div style={{ fontSize:15, color:D.ink3, fontWeight:500, marginTop:10, lineHeight:1.55 }}>{s.body}</div>
+          </div>
+
+          {/* CTA */}
+          <div style={{ padding:"22px 24px 44px" }}>
+            <button onClick={() => obStep < 2 ? setObStep(obStep+1) : setObStep(3)}
+              style={{ width:"100%", height:54, background:D.ink, color:D.cream, border:"none",
+                borderRadius:14, fontSize:15, fontWeight:700, cursor:"pointer", ...F }}>
+              {obStep < 2 ? "Continue →" : "Let's go →"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // ══════════════════════════════════════════════════════════════════════
   //  HOME TAB
   // ══════════════════════════════════════════════════════════════════════
   const HomeTab = () => {
-    const PERIODS = ["D","W","M","3M","6M","1Y","ALL"];
-    const periodLabel = period === "D" ? "Today"
-      : period === "M"   ? `${MONTH_NAMES[viewMonth - 1]} ${viewYear}`
-      : period === "W"   ? "This week"
-      : period === "1Y" || period === "ALL" ? `${viewYear}` : `Last ${period}`;
-    const saved = totalCredited - totalDebited;
+    const spent  = totalDebited;
+    const saved  = totalIncome - spent;
+    const budget = salary.amount ? Number(salary.amount) : (totalIncome > 0 ? totalIncome : 0);
+    const pctBudget = budget > 0 ? Math.min(100, Math.round((spent / budget) * 100)) : 0;
+    const daysInMonth  = new Date(viewYear, viewMonth, 0).getDate();
+    const daysElapsed  = period==="M" && viewMonth===NOW.getMonth()+1 && viewYear===NOW.getFullYear()
+      ? NOW.getDate() : daysInMonth;
 
-    // Categories to display (filter out zero-value)
-    const cats = [
-      { cat: "creditcard",    label: "Credit Card",    emoji: "💳", val: totalCC,        color: CC_COLOR,   sub: "Billed to credit cards"        },
-      { cat: "quickcart",     label: "QuickCart",      emoji: "🛒", val: totalQuickCart, color: QC_COLOR,   sub: "Zomato, Amazon, Zepto & more"  },
-      { cat: "investments",   label: "Investments",    emoji: "📈", val: totalInv,       color: INV_COLOR,  sub: "Groww, Zerodha, SIPs & MFs"    },
-      { cat: "miscellaneous", label: "Miscellaneous",  emoji: "🏷️", val: totalMisc,      color: MISC_COLOR, sub: "Everything else"               },
-    ].filter(c => c.val > 0);
+    const catRows = [
+      { key:"cc",    internal:"creditcard",    total:totalCC    },
+      { key:"quick", internal:"quickcart",     total:totalQuick },
+      { key:"invest",internal:"investments",   total:totalInv   },
+      { key:"misc",  internal:"miscellaneous", total:totalMisc  },
+    ].filter(c => c.total > 0);
+
+    const nextPayday = () => {
+      if (!salary.day) return null;
+      const d = new Date();
+      let month = d.getMonth(), year = d.getFullYear();
+      let pd = new Date(year, month, salary.day);
+      if (pd <= d) pd = new Date(year, month+1, salary.day);
+      const diff = Math.ceil((pd - d) / 86400000);
+      return { date: `${pd.getDate()} ${MONTH_NAMES[pd.getMonth()]}`, days: diff };
+    };
+    const payday = salary.amount ? nextPayday() : null;
 
     return (
-      <div style={{ overflowY: "auto", flex: 1, paddingBottom: 88 }}>
-
-        {/* ── HERO ────────────────────────────────────────────────── */}
-        <div style={{ background: CARD_BG, padding: "52px 20px 20px", borderBottom: `1px solid ${BORDER}` }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+      <div className="ns" style={{ overflowY:"auto", flex:1, paddingBottom:80, ...F }}>
+        {/* ── Hero ── */}
+        <div style={{ background:D.white, padding:"52px 22px 22px", borderBottom:`1px solid ${D.line}` }}>
+          {/* Top row */}
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:18 }}>
             <div>
-              <p style={{ color: T_MUTED, fontSize: 12, letterSpacing: 0.3, margin: "0 0 2px" }}>{periodLabel}</p>
-              <p style={{ color: T_DIM, fontSize: 11, fontWeight: 600, textTransform: "uppercase",
-                letterSpacing: 0.8, margin: "0 0 4px" }}>Total Spent</p>
-              <h1 style={{ color: T_BRIGHT, fontSize: 38, fontWeight: 900, margin: 0, letterSpacing: -1.5 }}>
-                {fmt(totalDebited)}
-              </h1>
-              {saved > 0 && (
-                <p style={{ color: INCOME_COLOR, fontSize: 12, margin: "6px 0 0", fontWeight: 600 }}>
-                  ↑ {fmt(saved)} saved this period
-                </p>
-              )}
-              {saved < 0 && (
-                <p style={{ color: DEBIT_COLOR, fontSize: 12, margin: "6px 0 0", fontWeight: 600 }}>
-                  ↓ {fmt(Math.abs(saved))} over income
-                </p>
-              )}
+              <div style={{ fontSize:11, letterSpacing:"0.12em", textTransform:"uppercase",
+                color:D.ink3, fontWeight:700, marginBottom:6 }}>
+                Total spent · {periodLabel}
+              </div>
+              <div style={{ fontSize:46, fontWeight:800, lineHeight:1, color:D.ink, letterSpacing:"-0.025em" }}>
+                {fmt(spent)}
+              </div>
+              {/* Saved / over pill */}
+              <div style={{ marginTop:10, display:"inline-flex", alignItems:"center", gap:4,
+                padding:"5px 12px", borderRadius:999, fontSize:12, fontWeight:700,
+                background: saved>=0 ? D.incomeSoft : "#fbe6ea",
+                color:      saved>=0 ? D.income     : D.quick }}>
+                {saved>=0 ? "↑" : "↓"} {fmt(Math.abs(saved),true)} {saved>=0 ? "saved" : "over"}
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => setShowSalary(true)} style={{ width: 36, height: 36, borderRadius: 12,
-                background: "rgba(5,150,105,.1)", border: "1.5px solid rgba(5,150,105,.2)",
-                cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>💰</button>
-              <button onClick={() => setShowTagMgr(true)} style={{ width: 36, height: 36, borderRadius: 12,
-                background: PAGE_BG, border: `1.5px solid ${BORDER}`,
-                cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <Tag size={15} color={T_DIM} />
-              </button>
+            <div style={{ display:"flex", gap:8 }}>
+              <button onClick={() => setShowSalary(true)} style={{ width:38, height:38, borderRadius:12,
+                background:D.incomeSoft, border:"none", cursor:"pointer",
+                display:"flex", alignItems:"center", justifyContent:"center", fontSize:17 }}>💰</button>
+              <button onClick={() => setShowTagMgr(true)} style={{ width:38, height:38, borderRadius:12,
+                background:D.cream2, border:`1px solid ${D.line}`, cursor:"pointer",
+                display:"flex", alignItems:"center", justifyContent:"center", fontSize:15 }}>🏷️</button>
             </div>
           </div>
+
+          {/* Payday pill */}
+          {payday && (
+            <div onClick={() => setShowSalary(true)} style={{ display:"inline-flex", alignItems:"center", gap:8,
+              padding:"6px 12px", borderRadius:999, background:D.incomeSoft,
+              marginBottom:16, cursor:"pointer" }}>
+              <span style={{ fontSize:11 }}>💰</span>
+              <span style={{ fontSize:11, fontWeight:700, color:D.income }}>
+                Payday · {payday.date} · in {payday.days} day{payday.days!==1?"s":""}
+              </span>
+            </div>
+          )}
+
+          {/* Budget progress */}
+          {budget > 0 && (
+            <div style={{ marginBottom:18 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, fontWeight:700,
+                letterSpacing:"0.08em", textTransform:"uppercase", color:D.ink3, marginBottom:6 }}>
+                <span>Income {fmt(totalIncome,true)}</span>
+                <span>{daysElapsed}/{daysInMonth} days</span>
+              </div>
+              <div style={{ height:7, borderRadius:4, background:D.cream3, overflow:"hidden" }}>
+                <div style={{ width:`${pctBudget}%`, height:"100%", borderRadius:4,
+                  background: pctBudget>90 ? D.quick : D.ink,
+                  transition:"width 800ms cubic-bezier(.2,.8,.2,1)" }}/>
+              </div>
+              <div style={{ display:"flex", justifyContent:"space-between", marginTop:7, fontSize:12, color:D.ink3 }}>
+                <span><span style={{ color:D.ink, fontWeight:700 }}>{pctBudget}%</span> of income</span>
+                {totalRefunds > 0 && (
+                  <span style={{ color:D.income, fontWeight:700 }}>↩ {fmt(totalRefunds,true)} back</span>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Period chips */}
-          <div style={{ display: "flex", gap: 5, overflowX: "auto", paddingBottom: 2, scrollbarWidth: "none" }}>
-            {PERIODS.map(p => (
-              <button key={p} onClick={() => setPeriod(p)} style={{ flexShrink: 0, padding: "6px 13px",
-                borderRadius: 20, border: `1.5px solid ${period === p ? T_BRIGHT : BORDER}`,
-                cursor: "pointer", fontSize: 11, fontWeight: 700, transition: "all .15s",
-                background: period === p ? T_BRIGHT : CARD_BG,
-                color:      period === p ? CARD_BG   : T_DIM }}>
-                {p}
-              </button>
-            ))}
-          </div>
+          <PeriodChips/>
 
           {/* Month nav */}
           {period === "M" && (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 14 }}>
-              <button onClick={() => shiftMonth(-1)} style={{ background: PAGE_BG, border: `1.5px solid ${BORDER}`,
-                borderRadius: 10, color: T_DIM, fontSize: 16, width: 32, height: 32, cursor: "pointer",
-                display: "flex", alignItems: "center", justifyContent: "center" }}>‹</button>
-              <span style={{ color: T_BRIGHT, fontSize: 14, fontWeight: 700 }}>
-                {MONTH_NAMES[viewMonth - 1]} {viewYear}
-              </span>
-              <button onClick={() => shiftMonth(1)} style={{ background: PAGE_BG, border: `1.5px solid ${BORDER}`,
-                borderRadius: 10, color: T_DIM, fontSize: 16, width: 32, height: 32, cursor: "pointer",
-                display: "flex", alignItems: "center", justifyContent: "center" }}>›</button>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:14, marginTop:14 }}>
+              <button onClick={() => shiftMonth(-1)} style={{ width:32, height:32, borderRadius:10,
+                background:D.cream2, border:`1px solid ${D.line}`, cursor:"pointer", fontSize:16, color:D.ink }}>‹</button>
+              <span style={{ fontSize:14, fontWeight:700, color:D.ink }}>{MONTH_NAMES[viewMonth-1]} {viewYear}</span>
+              <button onClick={() => shiftMonth(1)} style={{ width:32, height:32, borderRadius:10,
+                background:D.cream2, border:`1px solid ${D.line}`, cursor:"pointer", fontSize:16, color:D.ink }}>›</button>
             </div>
           )}
         </div>
 
-        <div style={{ padding: "16px 16px 0" }}>
-          <PrivacyBanner />
+        <div style={{ padding:"14px 14px 0" }}>
+          {/* Privacy banner */}
+          <button onClick={() => setShowPrivacy(true)} style={{
+            width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between",
+            background:D.cream2, border:`1px solid ${D.line}`, borderRadius:14,
+            padding:"10px 14px", marginBottom:14, cursor:"pointer", textAlign:"left",
+          }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <span style={{ fontSize:13 }}>🔒</span>
+              <span style={{ color:D.income, fontSize:11, fontWeight:700 }}>Privacy Protected</span>
+              <span style={{ color:D.ink4, fontSize:11 }}>· {blockedCount} blocked</span>
+            </div>
+            <span style={{ color:D.ink4, fontSize:11 }}>tap ›</span>
+          </button>
 
-          {/* ── 3 summary tiles: Income · Spent ── */}
-          <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+          {/* Summary tiles */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:14 }}>
             {[
-              { label: "Income this period",  val: totalCredited, color: INCOME_COLOR, bg: "rgba(5,150,105,.07)"  },
-              { label: "Total spent",          val: totalDebited,  color: DEBIT_COLOR,  bg: "rgba(220,38,38,.07)" },
+              { label:"Income this period", val:totalIncome, color:D.income, bg:D.incomeSoft },
+              { label:"Total spent",         val:spent,       color:D.ink,    bg:D.cream2     },
             ].map(({ label, val, color, bg }) => (
-              <div key={label} style={{ flex: 1, background: bg, borderRadius: 18,
-                border: `1px solid ${color}20`, padding: "16px 16px" }}>
-                <p style={{ color, fontSize: 10, fontWeight: 700, letterSpacing: 0.7,
-                  textTransform: "uppercase", margin: "0 0 8px" }}>{label}</p>
-                <p style={{ color: T_BRIGHT, fontSize: 20, fontWeight: 800, margin: 0, letterSpacing: -0.5 }}>{fmt(val)}</p>
+              <div key={label} style={{ background:bg, borderRadius:18, padding:"16px 16px" }}>
+                <div style={{ fontSize:10, fontWeight:700, letterSpacing:"0.08em",
+                  textTransform:"uppercase", color, marginBottom:8 }}>{label}</div>
+                <div style={{ fontSize:22, fontWeight:800, color:D.ink, letterSpacing:"-0.025em" }}>{fmt(val)}</div>
               </div>
             ))}
           </div>
 
-          {/* Refunds strip */}
-          {totalRefunds > 0 && (
-            <div style={{ background: "rgba(5,150,105,.06)", border: "1px solid rgba(5,150,105,.15)",
-              borderRadius: 14, padding: "11px 16px", marginBottom: 14,
-              display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 13 }}>↩</span>
-                <span style={{ color: T_DIM, fontSize: 12, fontWeight: 600 }}>Refunds &amp; cashbacks received</span>
-              </div>
-              <span style={{ color: INCOME_COLOR, fontSize: 13, fontWeight: 800 }}>+{fmt(totalRefunds)}</span>
-            </div>
-          )}
-
-          {/* ── WHERE IT WENT — category breakdown list ── */}
-          {totalDebited > 0 && cats.length > 0 && (
-            <div style={{ background: CARD_BG, borderRadius: 20, overflow: "hidden",
-              border: `1px solid ${BORDER}`, boxShadow: SHADOW, marginBottom: 16 }}>
-              {/* Section header */}
-              <div style={{ padding: "16px 18px 12px", borderBottom: `1px solid ${BORDER}` }}>
-                <p style={{ color: T_DIM, fontSize: 11, fontWeight: 700, textTransform: "uppercase",
-                  letterSpacing: 0.8, margin: 0 }}>Where it went</p>
+          {/* Where it went */}
+          {totalDebited > 0 && catRows.length > 0 && (
+            <div style={{ background:D.white, borderRadius:D.rLg, border:`1px solid ${D.line}`,
+              boxShadow:D.card, marginBottom:14, overflow:"hidden" }}>
+              <div style={{ padding:"18px 20px 12px", borderBottom:`1px solid ${D.line}` }}>
+                <div style={{ fontSize:11, letterSpacing:"0.12em", textTransform:"uppercase", color:D.ink3, fontWeight:700 }}>
+                  Where it went
+                </div>
+                <div style={{ fontSize:14, color:D.ink, fontWeight:600, marginTop:2 }}>
+                  {fmt(totalDebited,true)} across {catRows.length} {catRows.length===1?"category":"categories"}
+                </div>
               </div>
 
-              {cats.map((c, idx) => {
-                const pct = totalDebited > 0 ? Math.round((c.val / totalDebited) * 100) : 0;
-                const isActive = selectedCat === c.cat;
-                const isLast = idx === cats.length - 1;
-                const count = periodTxns.filter(t => t.category === c.cat).length;
+              {catRows.map((row, idx) => {
+                const c = CATS[row.key];
+                const pct = totalDebited > 0 ? Math.round((row.total/totalDebited)*100) : 0;
+                const count = periodTxns.filter(t => t.category===row.internal).length;
+                const isLast = idx === catRows.length-1;
                 return (
-                  <div key={c.cat}>
-                    <div onClick={() => toggleCat(c.cat)} style={{ padding: "16px 18px",
-                      background: isActive ? `${c.color}07` : "transparent",
-                      borderBottom: isLast && !isActive ? "none" : `1px solid ${BORDER}`,
-                      cursor: "pointer", transition: "background .15s" }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                        {/* Left: icon + name */}
-                        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                          <div style={{ width: 38, height: 38, borderRadius: 12,
-                            background: `${c.color}15`, display: "flex", alignItems: "center",
-                            justifyContent: "center", fontSize: 17, flexShrink: 0 }}>{c.emoji}</div>
-                          <div>
-                            <p style={{ color: isActive ? c.color : T_BRIGHT, fontSize: 14,
-                              fontWeight: 700, margin: "0 0 2px" }}>{c.label}</p>
-                            <p style={{ color: T_MUTED, fontSize: 11, margin: 0 }}>{count} transaction{count !== 1 ? "s" : ""} · {c.sub}</p>
-                          </div>
-                        </div>
-                        {/* Right: amount + % */}
-                        <div style={{ textAlign: "right", flexShrink: 0 }}>
-                          <p style={{ color: isActive ? c.color : T_BRIGHT, fontSize: 16,
-                            fontWeight: 800, margin: "0 0 2px", letterSpacing: -0.4 }}>{fmt(c.val)}</p>
-                          <p style={{ color: c.color, fontSize: 11, fontWeight: 700, margin: 0 }}>{pct}%</p>
-                        </div>
+                  <button key={row.key} onClick={() => setShowDrill(row.internal)} style={{
+                    width:"100%", display:"flex", alignItems:"center", gap:14,
+                    padding:"15px 20px", textAlign:"left", background:"transparent",
+                    borderTop: idx===0 ? "none" : `1px solid ${D.line}`,
+                    borderBottom:"none", border:"none",
+                    borderTop: idx===0 ? "none" : `1px solid ${D.line}`,
+                    cursor:"pointer",
+                  }}>
+                    <CatIcon catKey={row.internal} size={44}/>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:8 }}>
+                        <div style={{ fontSize:15, fontWeight:600, color:D.ink }}>{c.name}</div>
+                        <div style={{ fontSize:17, fontWeight:800, color:D.ink, letterSpacing:"-0.02em" }}>{fmt(row.total)}</div>
                       </div>
-                      {/* Progress bar */}
-                      <div style={{ height: 4, borderRadius: 99, background: `${c.color}15` }}>
-                        <div style={{ height: "100%", borderRadius: 99, background: c.color,
-                          width: `${pct}%`, transition: "width .5s ease" }} />
+                      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                        <div style={{ flex:1, height:5, borderRadius:3, background:D.cream3, overflow:"hidden" }}>
+                          <div style={{ width:`${pct}%`, height:"100%", borderRadius:3, background:c.color }}/>
+                        </div>
+                        <div style={{ fontSize:11, color:D.ink4, fontWeight:600, minWidth:26, textAlign:"right" }}>{pct}%</div>
                       </div>
+                      <div style={{ fontSize:11, color:D.ink4, marginTop:4 }}>{count} transaction{count!==1?"s":""}</div>
                     </div>
-
-                    {/* Inline drill-down */}
-                    {isActive && drillTxns.length > 0 && (
-                      <div style={{ background: `${c.color}05`, borderBottom: isLast ? "none" : `1px solid ${BORDER}`,
-                        padding: "0 18px 16px" }}>
-
-                        {/* CC: show brand breakdown sub-table */}
-                        {c.cat === "creditcard" && (() => {
-                          const m = {};
-                          drillTxns.filter(t => t.brand).forEach(t => { m[t.brand] = (m[t.brand]||0) + t.amount; });
-                          const brands = Object.entries(m).sort((a,b) => b[1]-a[1]);
-                          return brands.length > 0 ? (
-                            <div style={{ background: `${c.color}0a`, borderRadius: 12,
-                              padding: "10px 14px", marginBottom: 12, marginTop: 4 }}>
-                              <p style={{ color: c.color, fontSize: 10, fontWeight: 700,
-                                textTransform: "uppercase", letterSpacing: 0.8, margin: "0 0 8px" }}>By merchant</p>
-                              {brands.map(([brand, amt]) => (
-                                <div key={brand} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0" }}>
-                                  <span style={{ color: T_DIM, fontSize: 12 }}>{brand}</span>
-                                  <span style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 700 }}>{fmt(amt)}</span>
-                                </div>
-                              ))}
-                            </div>
-                          ) : null;
-                        })()}
-
-                        {/* QC: show brand bar chart */}
-                        {c.cat === "quickcart" && brandChartData.length > 0 && (
-                          <div style={{ marginBottom: 12, marginTop: 4 }}>
-                            <ResponsiveContainer width="100%" height={brandChartData.length * 34 + 8}>
-                              <BarChart data={brandChartData} layout="vertical" margin={{ top: 0, right: 56, bottom: 0, left: 0 }}>
-                                <XAxis type="number" hide />
-                                <YAxis type="category" dataKey="name" axisLine={false} tickLine={false}
-                                  tick={{ fill: T_DIM, fontSize: 11 }} width={72} />
-                                <Tooltip content={<CustomTooltip />} cursor={{ fill: "rgba(244,63,94,.05)" }} />
-                                <Bar dataKey="amt" fill={QC_COLOR} radius={[0,6,6,0]} barSize={12}>
-                                  <LabelList dataKey="amt" position="right" formatter={v => fmt(v)} style={{ fill: T_DIM, fontSize: 10 }} />
-                                </Bar>
-                              </BarChart>
-                            </ResponsiveContainer>
-                          </div>
-                        )}
-
-                        {/* Transaction rows */}
-                        {drillTxns.map((t, di) => (
-                          <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-                            padding: "10px 0", borderBottom: di < drillTxns.length-1 ? `1px solid ${BORDER}33` : "none" }}>
-                            <div>
-                              <p style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 600, margin: "0 0 2px" }}>
-                                {t.brand || t.bank}
-                                {c.cat === "creditcard" && <span style={{ color: T_MUTED, fontWeight: 400 }}> · {t.bank} CC</span>}
-                              </p>
-                              <p style={{ color: T_MUTED, fontSize: 10, margin: 0 }}>{t.date}</p>
-                            </div>
-                            <p style={{ color: c.color, fontSize: 14, fontWeight: 800, margin: 0 }}>−{fmt(t.amount)}</p>
-                          </div>
-                        ))}
-                        <p style={{ color: c.color, fontSize: 10, margin: "10px 0 0", textAlign: "center",
-                          fontWeight: 600, cursor: "pointer" }} onClick={() => toggleCat(c.cat)}>
-                          ↑ Collapse
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                  </button>
                 );
               })}
             </div>
           )}
 
-          {/* ── Yearly insight ── */}
-          {yearlyInsight && (
-            <div style={{ background: "rgba(99,102,241,.05)", border: "1px solid rgba(99,102,241,.15)",
-              borderRadius: 20, padding: "16px 18px", marginBottom: 14 }}>
-              <p style={{ color: "#818cf8", fontSize: 11, fontWeight: 800, margin: "0 0 12px",
-                textTransform: "uppercase", letterSpacing: 1 }}>📊 {viewYear} Year in Review</p>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                {[
-                  { icon: "🔺", label: "Top Category", val: `${yearlyInsight.topCat} · ${fmt(yearlyInsight.topCatAmt)}` },
-                  yearlyInsight.topBrand && { icon: "🛒", label: "Top Brand", val: `${yearlyInsight.topBrand[0]} · ${fmt(yearlyInsight.topBrand[1])}` },
-                  yearlyInsight.heaviestMonth && { icon: "📅", label: "Heaviest Month", val: `${yearlyInsight.heaviestMonth} · ${fmt(yearlyInsight.heaviestAmt)}` },
-                  yearlyInsight.biggestSpend  && { icon: "💸", label: "Biggest Spend", val: `${fmt(yearlyInsight.biggestSpend.amount)} · ${yearlyInsight.biggestSpend.date}` },
-                ].filter(Boolean).map((item, i) => (
-                  <div key={i} style={{ background: "rgba(99,102,241,.06)", borderRadius: 14, padding: "12px 12px" }}>
-                    <p style={{ color: T_MUTED, fontSize: 10, margin: "0 0 4px" }}>{item.icon} {item.label}</p>
-                    <p style={{ color: T_BRIGHT, fontSize: 12, fontWeight: 700, margin: 0 }}>{item.val}</p>
-                  </div>
-                ))}
+          {/* Empty state */}
+          {periodTxns.filter(t=>t.type==="debited").length === 0 && periodTxns.length === 0 && (
+            <div style={{ background:D.white, borderRadius:D.rLg, border:`1px solid ${D.line}`,
+              padding:24, textAlign:"center", marginBottom:14 }}>
+              <div style={{ width:64, height:64, borderRadius:20, background:D.ink, margin:"0 auto 16px",
+                display:"flex", alignItems:"center", justifyContent:"center", fontSize:26 }}>💬</div>
+              <div style={{ fontSize:22, fontWeight:800, color:D.ink, marginBottom:8, letterSpacing:"-0.01em" }}>
+                Let's find your spending
+              </div>
+              <div style={{ fontSize:14, color:D.ink3, lineHeight:1.55, marginBottom:20, padding:"0 8px" }}>
+                Scan your inbox once to auto-categorise transactions. Takes about 8 seconds.
+              </div>
+              <button style={{ width:"100%", height:52, background:D.ink, color:D.cream, border:"none",
+                borderRadius:14, fontSize:15, fontWeight:700, cursor:"pointer", ...F }}>
+                📱 Scan my SMS
+              </button>
+              <div style={{ marginTop:12, fontSize:12, color:D.ink4, lineHeight:1.5 }}>
+                🔒 Read-only, on-device. Nothing is uploaded.
               </div>
             </div>
           )}
 
-          {/* ── Tag chart ── */}
+          {/* Tag chart */}
           {tagChartData.length > 0 && (
-            <div style={{ background: CARD_BG, borderRadius: 20, padding: "16px 16px", marginBottom: 14,
-              border: `1px solid ${BORDER}`, boxShadow: SHADOW }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
-                <Tag size={13} color="#818cf8" />
-                <p style={{ color: "#818cf8", fontSize: 12, fontWeight: 700, textTransform: "uppercase",
-                  letterSpacing: 0.8, margin: 0 }}>Spending by Tag</p>
+            <div style={{ background:D.white, borderRadius:D.rLg, border:`1px solid ${D.line}`,
+              padding:"18px 16px", marginBottom:14, boxShadow:D.card }}>
+              <div style={{ fontSize:11, letterSpacing:"0.12em", textTransform:"uppercase",
+                color:D.ink3, fontWeight:700, marginBottom:14 }}>
+                Spending by tag
               </div>
-              <ResponsiveContainer width="100%" height={tagChartData.length * 38 + 10}>
-                <BarChart data={tagChartData} layout="vertical" margin={{ top: 0, right: 60, bottom: 0, left: 0 }}>
-                  <XAxis type="number" hide />
+              <ResponsiveContainer width="100%" height={tagChartData.length*36+8}>
+                <BarChart data={tagChartData} layout="vertical" margin={{top:0,right:54,bottom:0,left:0}}>
+                  <XAxis type="number" hide/>
                   <YAxis type="category" dataKey="name" axisLine={false} tickLine={false}
-                    tick={{ fill: T_DIM, fontSize: 12 }} width={80} />
-                  <Tooltip content={<CustomTooltip />} cursor={{ fill: "rgba(99,102,241,.05)" }} />
-                  <Bar dataKey="amt" fill="#6366f1" radius={[0, 8, 8, 0]} barSize={16}>
-                    <LabelList dataKey="amt" position="right" formatter={v => fmt(v)} style={{ fill: T_DIM, fontSize: 10 }} />
+                    tick={{fill:D.ink3,fontSize:12,fontFamily:"Inter Tight, sans-serif"}} width={72}/>
+                  <Tooltip formatter={v => fmt(v)} cursor={{fill:"rgba(79,85,199,.05)"}}/>
+                  <Bar dataKey="amt" fill={D.misc} radius={[0,6,6,0]} barSize={12}>
+                    <LabelList dataKey="amt" position="right" formatter={v=>fmt(v,true)}
+                      style={{fill:D.ink3,fontSize:10}}/>
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-            </div>
-          )}
-          {tagChartData.length === 0 && (
-            <div style={{ background: "rgba(99,102,241,.04)", border: "1px dashed rgba(99,102,241,.18)",
-              borderRadius: 18, padding: "20px 16px", textAlign: "center", marginBottom: 14 }}>
-              <Tag size={18} color="#6366f1" style={{ margin: "0 auto 8px" }} />
-              <p style={{ color: "#818cf8", fontSize: 12, fontWeight: 600, margin: "0 0 4px" }}>Tag Chart</p>
-              <p style={{ color: T_MUTED, fontSize: 11, margin: 0 }}>
-                Go to Overview → tap 🏷️ on any transaction to build your tag chart
-              </p>
             </div>
           )}
         </div>
@@ -929,427 +944,400 @@ export default function App() {
   //  OVERVIEW TAB
   // ══════════════════════════════════════════════════════════════════════
   const OverviewTab = () => {
-    // Group filtered txns by date for section headers
-    const filteredTxns = useMemo(() => periodTxns.filter(t => {
-      if (filters.type !== "all"     && t.type     !== filters.type)     return false;
-      if (filters.category !== "all" && t.category !== filters.category) return false;
+    const [filter, setFilter] = useState("all");
+
+    const CAT_FILTER_MAP = { income:"income", cc:"creditcard", quick:"quickcart", invest:"investments", misc:"miscellaneous" };
+
+    const filtered = useMemo(() => periodTxns.filter(t => {
+      if (filter==="all") return true;
+      if (filter==="in")  return t.type==="credited";
+      if (filter==="out") return t.type==="debited";
+      if (CAT_FILTER_MAP[filter]) return t.category===CAT_FILTER_MAP[filter];
       return true;
-    }), [periodTxns, filters]);
+    }), [filter]);
 
-    const grouped = useMemo(() => {
+    const groups = useMemo(() => {
       const map = {};
-      filteredTxns.forEach(t => {
-        const key = t.date || "Unknown";
-        if (!map[key]) map[key] = [];
-        map[key].push(t);
+      filtered.forEach(t => { (map[t.date] ||= []).push(t); });
+      return Object.entries(map).sort((a,b) => {
+        const mkA = a[1][0]?.monthKey||"", mkB = b[1][0]?.monthKey||"";
+        if (mkA!==mkB) return mkB.localeCompare(mkA);
+        return a[0].localeCompare(b[0])*-1;
       });
-      return Object.entries(map);
-    }, [filteredTxns]);
+    }, [filtered]);
 
-    const ACCENT = "#6366f1";
+    const sumIn  = filtered.filter(t=>t.type==="credited").reduce((s,t)=>s+t.amount,0);
+    const sumOut = filtered.filter(t=>t.type==="debited").reduce((s,t)=>s+t.amount,0);
 
-    // Summary totals for current filter
-    const sumIn  = filteredTxns.filter(t => t.type === "credited").reduce((s,t) => s+t.amount, 0);
-    const sumOut = filteredTxns.filter(t => t.type === "debited").reduce((s,t) => s+t.amount, 0);
+    const filterDefs = [
+      { key:"all",    label:"All" },
+      { key:"in",     label:"↓ Income", dot:D.income },
+      { key:"out",    label:"↑ Expenses" },
+      { key:"income", label:"Income",  dot:D.income },
+      { key:"cc",     label:"CC",      dot:D.cc      },
+      { key:"quick",  label:"Quick",   dot:D.quick   },
+      { key:"invest", label:"Invest",  dot:D.invest  },
+      { key:"misc",   label:"Misc",    dot:D.misc    },
+    ];
 
     return (
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden",
-        background: PAGE_BG }}>
-
-        {/* ── Header ── */}
-        <div style={{ background: CARD_BG, padding: "52px 20px 0",
-          borderBottom: `1px solid ${BORDER}` }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 14 }}>
+      <div style={{ height:"100%", display:"flex", flexDirection:"column", ...F }}>
+        {/* Header */}
+        <div style={{ padding:"52px 20px 0", background:D.cream }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", marginBottom:14 }}>
             <div>
-              <p style={{ color: T_MUTED, fontSize: 11, fontWeight: 600, textTransform: "uppercase",
-                letterSpacing: 0.8, margin: "0 0 2px" }}>Transactions</p>
-              <h2 style={{ color: T_BRIGHT, fontSize: 26, fontWeight: 900, margin: 0, letterSpacing: -0.8 }}>
-                Overview
-              </h2>
+              <div style={{ fontSize:28, fontWeight:800, color:D.ink, letterSpacing:"-0.02em" }}>Overview</div>
+              <div style={{ fontSize:12, color:D.ink3, fontWeight:500, marginTop:3 }}>
+                {periodLabel} · {filtered.length} transactions
+              </div>
             </div>
-            <div style={{ textAlign: "right" }}>
-              <p style={{ color: INCOME_COLOR, fontSize: 12, fontWeight: 700, margin: "0 0 1px" }}>+{fmt(sumIn)}</p>
-              <p style={{ color: DEBIT_COLOR,  fontSize: 12, fontWeight: 700, margin: 0 }}>−{fmt(sumOut)}</p>
+            <div style={{ textAlign:"right" }}>
+              <div style={{ fontSize:11, color:D.income, fontWeight:700, letterSpacing:"0.06em" }}>IN {fmt(sumIn,true)}</div>
+              <div style={{ fontSize:11, color:D.ink,    fontWeight:700, letterSpacing:"0.06em", marginTop:2 }}>OUT {fmt(sumOut,true)}</div>
             </div>
           </div>
-
           {/* Filter chips */}
-          <div style={{ display: "flex", gap: 7, overflowX: "auto", paddingBottom: 14,
-            scrollbarWidth: "none" }}>
-            {[
-              { type: "all", cat: "all", label: "All", color: ACCENT },
-              { type: "credited", cat: "all", label: "↑ Income", color: INCOME_COLOR },
-              { type: "debited",  cat: "all", label: "↓ Expenses", color: DEBIT_COLOR },
-            ].map(f => {
-              const active = filters.type === f.type && (f.type !== "all" || filters.category === "all");
-              return (
-                <button key={f.label}
-                  onClick={() => setFilters({ type: f.type, category: "all" })}
-                  style={chip(active, f.color)}>{f.label}</button>
-              );
-            })}
-            <div style={{ width: 1, background: BORDER, margin: "2px 2px", flexShrink: 0 }} />
-            {[
-              { val: "income",        label: "💚 Income",  color: INCOME_COLOR },
-              { val: "creditcard",    label: "💳 CC",      color: CC_COLOR     },
-              { val: "quickcart",     label: "🛒 Quick",   color: QC_COLOR     },
-              { val: "investments",   label: "📈 Invest",  color: INV_COLOR    },
-              { val: "miscellaneous", label: "🏷️ Misc",    color: MISC_COLOR   },
-            ].map(f => (
-              <button key={f.val}
-                onClick={() => setFilters(p => ({
-                  type: "all",
-                  category: p.category === f.val ? "all" : f.val,
-                }))}
-                style={chip(filters.category === f.val, f.color)}>
+          <div className="ns" style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:14 }}>
+            {filterDefs.map(f => (
+              <button key={f.key} onClick={() => setFilter(f.key)} style={{
+                height:32, padding:"0 12px", borderRadius:999, flexShrink:0,
+                fontSize:12, fontWeight:600, letterSpacing:"-0.01em",
+                border:`1px solid ${filter===f.key ? D.ink : D.line2}`,
+                background: filter===f.key ? D.ink : "transparent",
+                color:      filter===f.key ? D.cream : D.ink3,
+                display:"inline-flex", alignItems:"center", gap:6,
+                cursor:"pointer", transition:"all 140ms ease",
+              }}>
+                {f.dot && <span style={{ width:7, height:7, borderRadius:2, background:f.dot, flexShrink:0 }}/>}
                 {f.label}
               </button>
             ))}
           </div>
         </div>
 
-        {/* ── Transaction list ── */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px 96px" }}>
-          {filteredTxns.length === 0 && (
-            <div style={{ textAlign: "center", padding: "60px 0" }}>
-              <p style={{ color: T_MUTED, fontSize: 15, margin: "0 0 6px" }}>No transactions</p>
-              <p style={{ color: T_MUTED, fontSize: 12, margin: 0 }}>Try a different filter or period</p>
+        {/* List */}
+        <div className="ns" style={{ flex:1, overflowY:"auto", background:D.cream }}>
+          {groups.length === 0 && (
+            <div style={{ padding:"48px 20px", textAlign:"center", color:D.ink4, fontSize:14 }}>
+              No transactions match this filter.
             </div>
           )}
-
-          {grouped.map(([dateKey, txns]) => (
-            <div key={dateKey} style={{ marginBottom: 20 }}>
-              {/* Date group header */}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-                marginBottom: 8 }}>
-                <p style={{ color: T_MUTED, fontSize: 11, fontWeight: 700, margin: 0,
-                  textTransform: "uppercase", letterSpacing: 0.8 }}>{dateKey}</p>
-                <p style={{ color: T_MUTED, fontSize: 11, margin: 0 }}>
-                  {txns.length} txn{txns.length > 1 ? "s" : ""}
-                </p>
-              </div>
-
-              {/* Txn cards */}
-              <div style={{ background: CARD_BG, borderRadius: 18, overflow: "hidden",
-                border: `1px solid ${BORDER}`, boxShadow: SHADOW }}>
-                {txns.map((t, idx) => {
-                  const cs   = catStyle(t.category);
-                  const open = activeTagTxn === t.id;
-                  const isLast = idx === txns.length - 1;
-                  const CAT_EMOJI = { income:"💚", uho:"🏠", quickcart:"🛒",
-                    miscellaneous:"🏷️", creditcard:"💳", investments:"📈" };
-                  return (
-                    <div key={t.id}>
-                      <div style={{ padding: "14px 16px",
-                        borderBottom: isLast && !open ? "none" : `1px solid ${BORDER}` }}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                          {/* Left: icon + details */}
-                          <div style={{ display: "flex", alignItems: "center", gap: 12, flex: 1, minWidth: 0 }}>
-                            {/* Category icon circle */}
-                            <div style={{ width: 40, height: 40, borderRadius: 14, flexShrink: 0,
-                              background: cs?.background || PAGE_BG,
-                              display: "flex", alignItems: "center", justifyContent: "center",
-                              fontSize: 17 }}>
-                              {CAT_EMOJI[t.category] || "💸"}
+          {groups.map(([dateKey, txns]) => {
+            const dayTotal = txns.filter(t=>t.type==="debited").reduce((s,t)=>s+t.amount,0);
+            return (
+              <div key={dateKey}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
+                  padding:"12px 20px 6px", position:"sticky", top:0, background:D.cream, zIndex:2 }}>
+                  <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.1em",
+                    textTransform:"uppercase", color:D.ink3 }}>{dateKey}</div>
+                  <div style={{ fontSize:11, color:D.ink4, fontWeight:600, whiteSpace:"nowrap" }}>
+                    {dayTotal>0 ? `−${fmt(dayTotal,true)}` : ""}
+                  </div>
+                </div>
+                <div style={{ background:D.white, margin:"0 14px 6px", borderRadius:18,
+                  border:`1px solid ${D.line}`, overflow:"hidden" }}>
+                  {txns.map((t, idx) => {
+                    const dk = CK(t.category);
+                    const c  = CATS[dk];
+                    const isIn = t.type==="credited" || t.isRefund;
+                    const open = activeTagTxn===t.id;
+                    return (
+                      <div key={t.id}>
+                        <div style={{ display:"flex", alignItems:"center", gap:12,
+                          padding:"12px 16px",
+                          borderBottom: (idx<txns.length-1||open) ? `1px solid ${D.line}` : "none" }}>
+                          <MerchantAvatar merchant={t.brand||t.bank} catKey={t.category} size={42}/>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontSize:14, fontWeight:600, color:D.ink,
+                              overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                              {t.brand||t.bank}{t.isSalary?" 💰":""}
                             </div>
-                            <div style={{ minWidth: 0 }}>
-                              {/* Merchant / bank name */}
-                              <p style={{ color: T_BRIGHT, fontSize: 13, fontWeight: 700,
-                                margin: "0 0 2px", overflow: "hidden", textOverflow: "ellipsis",
-                                whiteSpace: "nowrap" }}>
-                                {t.brand || t.bank}
-                                {t.isSalary ? " 💰" : ""}
-                              </p>
-                              {/* Meta row */}
-                              <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
-                                <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px",
-                                  borderRadius: 99, ...cs }}>{catLabel(t.category)}</span>
-                                {t.isRefund && (
-                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px",
-                                    borderRadius: 99, background: "rgba(5,150,105,.1)", color: INCOME_COLOR }}>
-                                    ↩ Refund
-                                  </span>
-                                )}
-                                {t.isSalary && (
-                                  <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px",
-                                    borderRadius: 99, background: "rgba(5,150,105,.1)", color: INCOME_COLOR }}>
-                                    💰 Salary
-                                  </span>
-                                )}
-                                {t.tag && (
-                                  <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px",
-                                    borderRadius: 99, background: `${ACCENT}15`, color: ACCENT,
-                                    display: "flex", alignItems: "center", gap: 3 }}>
-                                    #{t.tag}
-                                    <button onClick={e => { e.stopPropagation(); removeTag(t.id); }}
-                                      style={{ background: "none", border: "none", cursor: "pointer",
-                                        padding: 0, lineHeight: 0, display: "flex" }}>
-                                      <X size={8} color={ACCENT} />
-                                    </button>
-                                  </span>
-                                )}
-                              </div>
+                            <div style={{ display:"flex", alignItems:"center", gap:5, marginTop:3, overflow:"hidden" }}>
+                              {t.isRefund ? (
+                                <span style={{ fontSize:10, padding:"2px 6px", borderRadius:4,
+                                  background:D.incomeSoft, color:D.income, fontWeight:700,
+                                  letterSpacing:"0.04em", whiteSpace:"nowrap" }}>↩ Refund</span>
+                              ) : t.isSalary ? (
+                                <span style={{ fontSize:10, padding:"2px 6px", borderRadius:4,
+                                  background:D.incomeSoft, color:D.income, fontWeight:700 }}>Salary</span>
+                              ) : (
+                                <span style={{ fontSize:11, color:c.color, fontWeight:600, whiteSpace:"nowrap" }}>{c.name}</span>
+                              )}
+                              {t.tag && <span style={{ fontSize:11, color:D.ink4, whiteSpace:"nowrap" }}>· #{t.tag}</span>}
+                              <span style={{ fontSize:11, color:D.ink4, whiteSpace:"nowrap" }}>· {t.date}</span>
                             </div>
                           </div>
-
-                          {/* Right: amount + tag btn */}
-                          <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-                            <span style={{ color: t.type === "credited" || t.isRefund ? INCOME_COLOR : T_BRIGHT,
-                              fontSize: 15, fontWeight: 800, letterSpacing: -0.3 }}>
-                              {t.type === "credited" || t.isRefund ? "+" : "−"}{fmt(t.amount)}
-                            </span>
-                            <button onClick={() => { setActiveTagTxn(open ? null : t.id); setCustomTagInput(""); }}
-                              style={{ width: 30, height: 30, borderRadius: 10,
-                                border: `1.5px solid ${open ? ACCENT : BORDER}`,
-                                background: open ? `${ACCENT}15` : CARD_BG,
-                                cursor: "pointer", display: "flex", alignItems: "center",
-                                justifyContent: "center" }}>
-                              <Tag size={12} color={open ? ACCENT : T_MUTED} />
-                            </button>
+                          <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:4, flexShrink:0 }}>
+                            <div style={{ fontSize:16, fontWeight:700, letterSpacing:"-0.02em",
+                              color: isIn ? D.income : D.ink }}>
+                              {isIn?"+":"−"}{fmt(t.amount)}
+                            </div>
+                            <button onClick={() => setActiveTagTxn(open?null:t.id)} style={{
+                              width:26, height:26, borderRadius:7,
+                              background: t.tag ? D.cream2 : "transparent",
+                              color:D.ink4, border:"none", cursor:"pointer",
+                              display:"flex", alignItems:"center", justifyContent:"center", fontSize:12 }}>🏷️</button>
                           </div>
                         </div>
-                      </div>
-
-                      {/* Inline tag picker */}
-                      {open && (
-                        <div style={{ background: `${ACCENT}08`, borderBottom: isLast ? "none" : `1px solid ${BORDER}`,
-                          padding: "12px 16px 14px" }}>
-                          <p style={{ color: T_DIM, fontSize: 10, fontWeight: 700,
-                            textTransform: "uppercase", letterSpacing: 0.8, margin: "0 0 10px" }}>Tag this transaction</p>
-                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-                            {userTags.map(tag => (
-                              <button key={tag} onClick={() => applyTag(t.id, tag)}
-                                style={{ padding: "5px 12px", borderRadius: 99,
-                                  border: `1.5px solid ${t.tag === tag ? ACCENT : BORDER}`,
-                                  background: t.tag === tag ? `${ACCENT}15` : CARD_BG,
-                                  color: t.tag === tag ? ACCENT : T_DIM,
-                                  fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
-                                {tag}
+                        {/* Tag picker */}
+                        {open && (
+                          <div style={{ background:D.cream2, padding:"12px 16px 14px",
+                            borderBottom: idx<txns.length-1 ? `1px solid ${D.line}` : "none" }}>
+                            <div style={{ fontSize:10, fontWeight:700, textTransform:"uppercase",
+                              letterSpacing:"0.08em", color:D.ink3, marginBottom:10 }}>Tag this transaction</div>
+                            <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:10 }}>
+                              {userTags.map(tag => (
+                                <button key={tag} onClick={() => applyTag(t.id, tag)} style={{
+                                  padding:"6px 12px", borderRadius:999,
+                                  border:`1px solid ${t.tag===tag ? D.ink : D.line2}`,
+                                  background: t.tag===tag ? D.ink : D.white,
+                                  color: t.tag===tag ? D.cream : D.ink,
+                                  fontSize:12, fontWeight:600, cursor:"pointer",
+                                }}>{tag}</button>
+                              ))}
+                            </div>
+                            <div style={{ display:"flex", gap:8 }}>
+                              <input value={tagDraft} onChange={e=>setTagDraft(e.target.value)}
+                                onKeyDown={e=>{
+                                  if(e.key==="Enter"&&tagDraft.trim()){
+                                    const tag=tagDraft.trim();
+                                    if(!userTags.includes(tag)) setUserTags(p=>[...p,tag]);
+                                    applyTag(t.id,tag);
+                                  }
+                                }}
+                                placeholder="Custom tag…"
+                                style={{ flex:1, height:38, padding:"0 12px",
+                                  border:`1px solid ${D.line}`, borderRadius:10,
+                                  background:D.white, fontSize:13, color:D.ink,
+                                  outline:"none", ...F }}/>
+                              <button onClick={()=>{
+                                  const tag=tagDraft.trim();
+                                  if(!tag) return;
+                                  if(!userTags.includes(tag)) setUserTags(p=>[...p,tag]);
+                                  applyTag(t.id,tag);
+                                }}
+                                style={{ height:38, padding:"0 14px", background:D.ink, color:D.cream,
+                                  border:"none", borderRadius:10, fontSize:13, fontWeight:600, cursor:"pointer" }}>
+                                Add
                               </button>
-                            ))}
+                            </div>
+                            {t.tag && (
+                              <button onClick={()=>removeTag(t.id)} style={{ marginTop:8,
+                                padding:"5px 12px", borderRadius:999, border:`1px solid ${D.line2}`,
+                                background:"transparent", color:D.ink3, fontSize:12, cursor:"pointer" }}>
+                                Clear tag
+                              </button>
+                            )}
                           </div>
-                          <div style={{ display: "flex", gap: 8 }}>
-                            <input value={customTagInput}
-                              onChange={e => setCustomTagInput(e.target.value)}
-                              onKeyDown={e => {
-                                if (e.key === "Enter" && customTagInput.trim()) {
-                                  const tag = customTagInput.trim();
-                                  if (!userTags.includes(tag)) setUserTags(p => [...p, tag]);
-                                  applyTag(t.id, tag);
-                                }
-                              }}
-                              placeholder="Custom tag…"
-                              style={{ flex: 1, background: CARD_BG, border: `1.5px solid ${BORDER}`,
-                                borderRadius: 10, padding: "8px 12px", color: T_BRIGHT,
-                                fontSize: 12, outline: "none", fontFamily: "inherit" }} />
-                            <button onClick={() => {
-                                const tag = customTagInput.trim();
-                                if (!tag) return;
-                                if (!userTags.includes(tag)) setUserTags(p => [...p, tag]);
-                                applyTag(t.id, tag);
-                              }}
-                              style={{ padding: "8px 16px", background: ACCENT, border: "none",
-                                borderRadius: 10, color: "#fff", fontSize: 12,
-                                cursor: "pointer", fontWeight: 700 }}>
-                              Add
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
+          <div style={{ height:20 }}/>
         </div>
       </div>
     );
   };
 
   // ══════════════════════════════════════════════════════════════════════
-  //  TAG MANAGER MODAL
+  //  MODALS
   // ══════════════════════════════════════════════════════════════════════
-  const sheetStyle = { background: CARD_BG, borderRadius: "24px 24px 0 0", width: "100%",
-    padding: "8px 20px 40px", maxHeight: "75%", overflowY: "auto",
-    boxShadow: "0 -8px 40px rgba(0,0,0,.1)" };
-  const overlayStyle = { position: "absolute", inset: 0, background: "rgba(26,20,16,.35)", zIndex: 50,
-    display: "flex", alignItems: "flex-end" };
-  const inputStyle = { width: "100%", background: PAGE_BG, border: `1.5px solid ${BORDER}`,
-    borderRadius: 12, padding: "10px 14px", color: T_BRIGHT, fontSize: 14,
-    outline: "none", fontFamily: "inherit", boxSizing: "border-box" };
-  const modalHandle = { width: 36, height: 4, borderRadius: 99, background: BORDER, margin: "0 auto 20px" };
-  const modalTitle = { color: T_BRIGHT, fontSize: 18, fontWeight: 800, margin: 0 };
-  const closeBtn = { background: PAGE_BG, border: `1.5px solid ${BORDER}`, borderRadius: 10,
-    width: 32, height: 32, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" };
 
+  // Salary
+  const SalaryModal = () => (
+    <Sheet open={showSalary} onClose={()=>setShowSalary(false)} title="Salary Setup 💰">
+      <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+        <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+          <label style={{ fontSize:11, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", color:D.ink3 }}>
+            Monthly salary
+          </label>
+          <input type="number" value={salaryInput.amount}
+            onChange={e=>setSalaryInput(p=>({...p,amount:e.target.value}))}
+            placeholder="e.g. 85000" inputMode="numeric"
+            style={{ height:64, padding:"0 16px", border:`1.5px solid ${D.line}`, borderRadius:16,
+              background:D.white, fontSize:28, fontWeight:800, color:D.ink, outline:"none", ...F }}/>
+        </div>
+        <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+          <label style={{ fontSize:11, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", color:D.ink3 }}>
+            Payday (1–31)
+          </label>
+          <input type="number" min="1" max="31" value={salaryInput.day}
+            onChange={e=>setSalaryInput(p=>({...p,day:e.target.value}))}
+            style={{ height:52, padding:"0 16px", border:`1.5px solid ${D.line}`, borderRadius:14,
+              background:D.white, fontSize:17, fontWeight:600, color:D.ink, outline:"none", ...F }}/>
+        </div>
+        {salaryInput.amount > 0 && (
+          <div style={{ padding:"14px 16px", background:D.incomeSoft, borderRadius:14 }}>
+            <div style={{ fontSize:13, color:D.ink }}>
+              <span style={{ fontWeight:800, color:D.income }}>{fmt(Number(salaryInput.amount))}</span>
+              {" "}on the {salaryInput.day||1}{["st","nd","rd"][((salaryInput.day||1)-1)%10]||"th"} of each month
+            </div>
+          </div>
+        )}
+        <div style={{ display:"flex", gap:8 }}>
+          <button onClick={()=>{setSalary({amount:"",day:1});setShowSalary(false);}}
+            style={{ height:52, padding:"0 20px", background:"transparent",
+              border:`1px solid ${D.line2}`, borderRadius:14, color:D.ink3,
+              fontSize:14, fontWeight:600, cursor:"pointer", ...F }}>
+            Clear
+          </button>
+          <button onClick={()=>{
+              setSalary({amount:salaryInput.amount, day:Number(salaryInput.day)||1});
+              setShowSalary(false);
+            }}
+            style={{ flex:1, height:52, background:D.ink, color:D.cream, border:"none",
+              borderRadius:14, fontSize:15, fontWeight:700, cursor:"pointer", ...F }}>
+            Save
+          </button>
+        </div>
+      </div>
+    </Sheet>
+  );
+
+  // Tag manager
   const TagManagerModal = () => (
-    <div onClick={() => setShowTagMgr(false)} style={overlayStyle}>
-      <div onClick={e => e.stopPropagation()} style={sheetStyle}>
-        <div style={modalHandle} />
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <h3 style={modalTitle}>Manage Tags</h3>
-          <button onClick={() => setShowTagMgr(false)} style={closeBtn}>
-            <X size={14} color={T_DIM} />
-          </button>
+    <Sheet open={showTagMgr} onClose={()=>setShowTagMgr(false)} title="Tags">
+      <div style={{ display:"flex", gap:8, marginBottom:16 }}>
+        <input value={tagDraft} onChange={e=>setTagDraft(e.target.value)}
+          onKeyDown={e=>{if(e.key==="Enter"&&tagDraft.trim()){setUserTags(p=>[...p,tagDraft.trim()]);setTagDraft("");}}}
+          placeholder="New tag…"
+          style={{ flex:1, height:46, padding:"0 14px", border:`1px solid ${D.line}`,
+            borderRadius:12, background:D.white, fontSize:14, color:D.ink, outline:"none", ...F }}/>
+        <button onClick={()=>{if(tagDraft.trim()){setUserTags(p=>[...p,tagDraft.trim()]);setTagDraft("");}}}
+          style={{ height:46, padding:"0 18px", background:D.ink, color:D.cream, border:"none",
+            borderRadius:12, fontSize:14, fontWeight:600, cursor:"pointer", ...F }}>Add</button>
+      </div>
+      <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+        {userTags.map(tag => (
+          <div key={tag} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 12px",
+            background:D.white, border:`1px solid ${D.line}`, borderRadius:999,
+            fontSize:13, fontWeight:600, color:D.ink }}>
+            #{tag}
+            <button onClick={()=>setUserTags(p=>p.filter(t=>t!==tag))}
+              style={{ color:D.ink4, background:"none", border:"none", cursor:"pointer",
+                fontSize:15, lineHeight:1, padding:0 }}>×</button>
+          </div>
+        ))}
+      </div>
+    </Sheet>
+  );
+
+  // Privacy
+  const PrivacyModal = () => (
+    <Sheet open={showPrivacy} onClose={()=>setShowPrivacy(false)} title="Privacy & Security">
+      <div style={{ display:"flex", alignItems:"center", gap:12, padding:16,
+        background:D.white, border:`1px solid ${D.line}`, borderRadius:14, marginBottom:16 }}>
+        <div style={{ width:44, height:44, borderRadius:14, background:D.incomeSoft,
+          display:"flex", alignItems:"center", justifyContent:"center", fontSize:22 }}>🔒</div>
+        <div>
+          <div style={{ fontSize:14, fontWeight:700, color:D.ink }}>Protected, on-device</div>
+          <div style={{ fontSize:12, color:D.ink3, marginTop:2 }}>{blockedCount} messages blocked</div>
         </div>
-        <p style={{ color: T_MUTED, fontSize: 12, margin: "0 0 18px" }}>
-          Tag any transaction to track it — tagged items appear in the spending chart.
-        </p>
-        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-          <input value={newGlobalTag} onChange={e => setNewGlobalTag(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter") addGlobalTag(); }}
-            placeholder="New tag name…"
-            style={{ ...inputStyle, flex: 1 }} />
-          <button onClick={addGlobalTag}
-            style={{ padding: "10px 18px", background: MISC_COLOR, border: "none",
-              borderRadius: 12, color: "#fff", fontSize: 13, cursor: "pointer", fontWeight: 700,
-              display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-            <Plus size={14} /> Add
-          </button>
+      </div>
+      {[
+        { ok:true,  t:"Read bank & merchant SMS to find spends" },
+        { ok:true,  t:"Parse amount, merchant, category locally" },
+        { ok:false, t:"Upload messages anywhere" },
+        { ok:false, t:"Read personal conversations" },
+        { ok:false, t:"Access contacts, photos, or location" },
+      ].map((r,i) => (
+        <div key={i} style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 0",
+          borderBottom:`1px solid ${D.line}` }}>
+          <div style={{ width:22, height:22, borderRadius:11, flexShrink:0,
+            background: r.ok ? D.income : D.ink, color:D.cream,
+            display:"flex", alignItems:"center", justifyContent:"center",
+            fontSize:11, fontWeight:700 }}>{r.ok?"✓":"✕"}</div>
+          <div style={{ fontSize:13, color: r.ok?D.ink:D.ink3, fontWeight:500 }}>{r.t}</div>
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {userTags.map(tag => (
-            <div key={tag} style={{ display: "flex", alignItems: "center", gap: 6,
-              padding: "7px 14px", background: PAGE_BG, borderRadius: 99,
-              border: `1.5px solid ${BORDER}` }}>
-              <span style={{ color: T_BRIGHT, fontSize: 13, fontWeight: 600 }}>{tag}</span>
-              <button onClick={() => setUserTags(p => p.filter(t => t !== tag))}
-                style={{ background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 0 }}>
-                <X size={11} color={T_MUTED} />
-              </button>
+      ))}
+    </Sheet>
+  );
+
+  // Drill-down
+  const DrillModal = () => {
+    if (!showDrill) return null;
+    const dk = CK(showDrill);
+    const c  = CATS[dk];
+    const items = periodTxns.filter(t => t.category===showDrill && t.type==="debited");
+    const total = items.reduce((s,t)=>s+t.amount,0);
+    return (
+      <Sheet open={!!showDrill} onClose={()=>setShowDrill(null)} title={c.name}>
+        <div style={{ display:"flex", alignItems:"center", gap:16, padding:"8px 0 20px" }}>
+          <CatIcon catKey={showDrill} size={52}/>
+          <div>
+            <div style={{ fontSize:30, fontWeight:800, color:D.ink, letterSpacing:"-0.02em" }}>{fmt(total)}</div>
+            <div style={{ fontSize:12, color:D.ink3, fontWeight:500, marginTop:2 }}>
+              {items.length} transaction{items.length!==1?"s":""} · {periodLabel}
+            </div>
+          </div>
+        </div>
+        <div style={{ background:D.white, borderRadius:14, border:`1px solid ${D.line}`, overflow:"hidden" }}>
+          {items.map((t,i) => (
+            <div key={t.id} style={{ display:"flex", alignItems:"center", gap:12, padding:"13px 16px",
+              borderBottom: i<items.length-1 ? `1px solid ${D.line}` : "none" }}>
+              <MerchantAvatar merchant={t.brand||t.bank} catKey={t.category} size={40}/>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13, fontWeight:600, color:D.ink,
+                  overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                  {t.brand||t.bank}
+                </div>
+                <div style={{ fontSize:11, color:D.ink4, marginTop:2 }}>{t.date}</div>
+              </div>
+              <div style={{ fontSize:15, fontWeight:700, color:D.ink, letterSpacing:"-0.01em" }}>
+                −{fmt(t.amount)}
+              </div>
             </div>
           ))}
         </div>
-      </div>
-    </div>
-  );
-
-  // ── Salary Setup Modal ────────────────────────────────────────────────────
-  const SalaryModal = () => (
-    <div onClick={() => setShowSalary(false)} style={{ ...overlayStyle, zIndex: 55 }}>
-      <div onClick={e => e.stopPropagation()} style={sheetStyle}>
-        <div style={modalHandle} />
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-          <div>
-            <h3 style={modalTitle}>Salary Setup 💰</h3>
-            <p style={{ color: T_MUTED, fontSize: 12, margin: "4px 0 0" }}>
-              Sets a recurring income entry on your chosen date each month
-            </p>
-          </div>
-          <button onClick={() => setShowSalary(false)} style={closeBtn}>
-            <X size={14} color={T_DIM} />
-          </button>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 20 }}>
-          {/* Salary amount */}
-          <div>
-            <p style={{ color: T_DIM, fontSize: 11, fontWeight: 700, textTransform: "uppercase",
-              letterSpacing: 0.8, margin: "0 0 8px" }}>Monthly Salary (₹)</p>
-            <input type="number" value={salaryInput.amount}
-              onChange={e => setSalaryInput(p => ({ ...p, amount: e.target.value }))}
-              placeholder="e.g. 75000"
-              style={inputStyle} />
-          </div>
-
-          {/* Salary day */}
-          <div>
-            <p style={{ color: T_DIM, fontSize: 11, fontWeight: 700, textTransform: "uppercase",
-              letterSpacing: 0.8, margin: "0 0 8px" }}>Day salary arrives (1–31)</p>
-            <input type="number" min="1" max="31" value={salaryInput.day}
-              onChange={e => setSalaryInput(p => ({ ...p, day: e.target.value }))}
-              placeholder="1"
-              style={inputStyle} />
-          </div>
-
-          {/* Label */}
-          <div>
-            <p style={{ color: T_DIM, fontSize: 11, fontWeight: 700, textTransform: "uppercase",
-              letterSpacing: 0.8, margin: "0 0 8px" }}>Label</p>
-            <input type="text" value={salaryInput.label}
-              onChange={e => setSalaryInput(p => ({ ...p, label: e.target.value }))}
-              placeholder="Salary"
-              style={inputStyle} />
-          </div>
-
-          {/* Preview */}
-          {salaryInput.amount > 0 && (
-            <div style={{ background: `rgba(5,150,105,.08)`, border: `1px solid rgba(5,150,105,.2)`,
-              borderRadius: 14, padding: "12px 16px" }}>
-              <p style={{ color: INCOME_COLOR, fontSize: 12, fontWeight: 700, margin: "0 0 4px" }}>Preview</p>
-              <p style={{ color: T_BRIGHT, fontSize: 13, margin: 0 }}>
-                +{fmt(Number(salaryInput.amount))} on the {salaryInput.day || 1}{["st","nd","rd"][((salaryInput.day||1)-1)%10] || "th"} of each month as "{salaryInput.label || "Salary"}"
-              </p>
-            </div>
-          )}
-
-          {/* Save / Clear buttons */}
-          <div style={{ display: "flex", gap: 10 }}>
-            <button
-              onClick={() => {
-                setSalary({ amount: salaryInput.amount, day: Number(salaryInput.day)||1, label: salaryInput.label||"Salary" });
-                setShowSalary(false);
-              }}
-              style={{ flex: 1, padding: "14px", background: INCOME_COLOR, border: "none",
-                borderRadius: 14, color: "#fff", fontSize: 15, fontWeight: 800, cursor: "pointer" }}>
-              Save Salary
-            </button>
-            {salary.amount > 0 && (
-              <button
-                onClick={() => { setSalary({ amount: "", day: 1, label: "Salary" }); setShowSalary(false); }}
-                style={{ padding: "14px 18px", background: PAGE_BG, border: `1.5px solid ${BORDER}`,
-                  borderRadius: 14, color: T_DIM, fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
-                Clear
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+      </Sheet>
+    );
+  };
 
   // ══════════════════════════════════════════════════════════════════════
   //  ROOT RENDER
   // ══════════════════════════════════════════════════════════════════════
   return (
-    <div style={{ maxWidth: 430, margin: "0 auto", height: "100vh",
-      background: PAGE_BG, display: "flex", flexDirection: "column",
-      overflow: "hidden", position: "relative",
-      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
+    <div style={{ maxWidth:430, margin:"0 auto", height:"100vh",
+      background:D.cream, display:"flex", flexDirection:"column",
+      overflow:"hidden", position:"relative", ...F }}>
 
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        {tab === "home"     && <HomeTab />}
-        {tab === "overview" && <OverviewTab />}
+      <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
+        {tab==="home"     && <HomeTab/>}
+        {tab==="overview" && <OverviewTab/>}
       </div>
 
-      {/* Bottom Navbar — light, pill style */}
-      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0,
-        background: CARD_BG, borderTop: `1px solid ${BORDER}`,
-        display: "flex", alignItems: "center", justifyContent: "space-around",
-        paddingBottom: 16, paddingTop: 8, zIndex: 40 }}>
+      {/* Bottom nav — pill */}
+      <div style={{ background:D.cream, borderTop:`1px solid ${D.line}`,
+        display:"flex", padding:"10px 16px 18px", gap:8, flexShrink:0 }}>
         {[
-          { id: "home",     label: "Home",         Icon: Home },
-          { id: "overview", label: "Transactions",  Icon: List },
-        ].map(({ id, label, Icon }) => {
-          const active = tab === id;
+          { id:"home",     label:"Home",         icon:"⌂" },
+          { id:"overview", label:"Transactions",  icon:"☰" },
+        ].map(({ id, label, icon }) => {
+          const active = tab===id;
           return (
-            <button key={id} onClick={() => setTab(id)}
-              style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
-                background: active ? `${MISC_COLOR}12` : "none",
-                border: "none", borderRadius: 14, cursor: "pointer",
-                padding: "8px 26px", transition: "all .15s" }}>
-              <Icon size={20} color={active ? MISC_COLOR : T_MUTED} strokeWidth={active ? 2.5 : 2} />
-              <span style={{ fontSize: 10, fontWeight: active ? 700 : 500,
-                color: active ? MISC_COLOR : T_MUTED }}>{label}</span>
+            <button key={id} onClick={()=>setTab(id)} style={{
+              flex:1, height:48, borderRadius:999,
+              display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+              fontSize:14, fontWeight:600, letterSpacing:"-0.01em",
+              background: active ? D.ink : "transparent",
+              color:      active ? D.cream : D.ink3,
+              border:"none", cursor:"pointer", transition:"all 160ms ease",
+            }}>
+              <span style={{ fontSize:16 }}>{icon}</span>
+              {label}
             </button>
           );
         })}
       </div>
 
-      {showTagMgr  && <TagManagerModal />}
-      {showPrivacy && <PrivacyModal    />}
-      {showSalary  && <SalaryModal     />}
+      {showSalary  && <SalaryModal/>}
+      {showTagMgr  && <TagManagerModal/>}
+      {showPrivacy && <PrivacyModal/>}
+      {showDrill   && <DrillModal/>}
     </div>
   );
 }
