@@ -229,11 +229,14 @@ function secureExtract(raw) {
   const brand    = detectBrand(scrubbed);
   const invBrand = detectInvestmentBrand(scrubbed);
 
+  // Priority: known investment brand > known quickcart brand > generic CC > misc
+  // Known brands override credit-card classification so Blinkit/Zomato/Groww
+  // paid via credit card still land in the correct category.
   let category;
   if      (type === "credited") category = "income";
-  else if (isCreditCard)        category = "creditcard";
-  else if (invBrand)            category = "investments";
-  else if (brand)               category = "quickcart";
+  else if (invBrand)            category = "investments";   // Groww/Zerodha always → investments
+  else if (brand)               category = "quickcart";    // Blinkit/Zomato always → quickcart
+  else if (isCreditCard)        category = "creditcard";   // generic CC (no known brand)
   else                          category = "miscellaneous";
 
   // Only allowlisted brand name is stored — never raw text, account info, or personal data
