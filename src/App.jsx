@@ -13,12 +13,10 @@
  * ✅ GDPR Art.5(1)(c) · CCPA "no sale" · India DPDP Act 2023 purpose-limitation
  */
 
-import { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { registerPlugin } from "@capacitor/core";
 const SmsNative = registerPlugin("Sms");
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList
-} from "recharts";
+// recharts removed — using inline bars for tag chart
 
 // ══════════════════════════════════════════════════════════════════════════
 //  SECURITY ENGINE — OTP / sensitive message blocker
@@ -298,9 +296,9 @@ const MerchantAvatar = ({ merchant, catKey, size = 42 }) => {
   return (
     <div style={{ width: size, height: size, borderRadius: Math.round(size * 0.28),
       background: c.soft, display: "flex", alignItems: "center", justifyContent: "center",
-      fontSize: Math.round(size * 0.42), fontWeight: 700, color: c.color, flexShrink: 0,
+      fontSize: Math.round(size * 0.36), fontWeight: 700, color: c.color, flexShrink: 0,
       fontFamily: "'Inter Tight', sans-serif", userSelect: "none" }}>
-      {((merchant || "?")[0]).toUpperCase()}
+      {(merchant || "?").split(/\s+/).filter(Boolean).slice(0,2).map(w=>w[0].toUpperCase()).join("")}
     </div>
   );
 };
@@ -734,115 +732,138 @@ export default function App() {
     };
     const payday = salary.amount ? nextPayday() : null;
 
+    const budgetLeft = budget > 0 ? Math.max(0, budget - spent) : 0;
+    const daysLeft = daysInMonth - daysElapsed;
+
     return (
-      <div className="ns" style={{ overflowY:"auto", flex:1, paddingBottom:80, ...F }}>
-        {/* ── Hero ── */}
-        <div style={{ background:D.white, padding:"52px 22px 22px", borderBottom:`1px solid ${D.line}` }}>
-          {/* Top row */}
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:18 }}>
+      <div className="ns" style={{ overflowY:"auto", flex:1, paddingBottom:80, ...F, background:D.cream }}>
+
+        {/* ── Top bar: greeting + action icons ── */}
+        <div style={{ padding:"52px 20px 0", background:D.cream }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
             <div>
-              <div style={{ fontSize:11, letterSpacing:"0.12em", textTransform:"uppercase",
-                color:D.ink3, fontWeight:700, marginBottom:6 }}>
-                Total spent · {periodLabel}
-              </div>
-              <div style={{ fontSize:46, fontWeight:800, lineHeight:1, color:D.ink, letterSpacing:"-0.025em" }}>
-                {fmt(spent)}
-              </div>
-              {/* Saved / over pill */}
-              <div style={{ marginTop:10, display:"inline-flex", alignItems:"center", gap:4,
-                padding:"5px 12px", borderRadius:999, fontSize:12, fontWeight:700,
-                background: saved>=0 ? D.incomeSoft : "#fbe6ea",
-                color:      saved>=0 ? D.income     : D.quick }}>
-                {saved>=0 ? "↑" : "↓"} {fmt(Math.abs(saved),true)} {saved>=0 ? "saved" : "over"}
-              </div>
+              <div style={{ fontSize:10, letterSpacing:"0.14em", textTransform:"uppercase",
+                color:D.ink3, fontWeight:700 }}>Good {
+                  (() => { const h=new Date().getHours(); return h<12?"Morning":h<17?"Afternoon":"Evening"; })()
+                }</div>
             </div>
             <div style={{ display:"flex", gap:8 }}>
               <button onClick={() => setShowSalary(true)} style={{ width:38, height:38, borderRadius:12,
-                background:D.incomeSoft, border:"none", cursor:"pointer",
-                display:"flex", alignItems:"center", justifyContent:"center", fontSize:17 }}>💰</button>
+                background:D.white, border:`1px solid ${D.line}`, cursor:"pointer",
+                display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}>💰</button>
               <button onClick={() => setShowTagMgr(true)} style={{ width:38, height:38, borderRadius:12,
-                background:D.cream2, border:`1px solid ${D.line}`, cursor:"pointer",
+                background:D.white, border:`1px solid ${D.line}`, cursor:"pointer",
                 display:"flex", alignItems:"center", justifyContent:"center", fontSize:15 }}>🏷️</button>
+              <button onClick={() => setShowPrivacy(true)} style={{ width:38, height:38, borderRadius:12,
+                background:D.white, border:`1px solid ${D.line}`, cursor:"pointer",
+                display:"flex", alignItems:"center", justifyContent:"center", fontSize:15 }}>🔒</button>
             </div>
           </div>
 
           {/* Payday pill */}
           {payday && (
-            <div onClick={() => setShowSalary(true)} style={{ display:"inline-flex", alignItems:"center", gap:8,
+            <div onClick={() => setShowSalary(true)} style={{ display:"inline-flex", alignItems:"center", gap:6,
               padding:"6px 12px", borderRadius:999, background:D.incomeSoft,
-              marginBottom:16, cursor:"pointer" }}>
-              <span style={{ fontSize:11 }}>💰</span>
+              marginTop:10, cursor:"pointer" }}>
+              <span style={{ fontSize:12 }}>🗓</span>
               <span style={{ fontSize:11, fontWeight:700, color:D.income }}>
                 Payday · {payday.date} · in {payday.days} day{payday.days!==1?"s":""}
               </span>
             </div>
           )}
 
-          {/* Budget progress */}
-          {budget > 0 && (
-            <div style={{ marginBottom:18 }}>
-              <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, fontWeight:700,
-                letterSpacing:"0.08em", textTransform:"uppercase", color:D.ink3, marginBottom:6 }}>
-                <span>Income {fmt(totalIncome,true)}</span>
-                <span>{daysElapsed}/{daysInMonth} days</span>
-              </div>
-              <div style={{ height:7, borderRadius:4, background:D.cream3, overflow:"hidden" }}>
-                <div style={{ width:`${pctBudget}%`, height:"100%", borderRadius:4,
-                  background: pctBudget>90 ? D.quick : D.ink,
-                  transition:"width 800ms cubic-bezier(.2,.8,.2,1)" }}/>
-              </div>
-              <div style={{ display:"flex", justifyContent:"space-between", marginTop:7, fontSize:12, color:D.ink3 }}>
-                <span><span style={{ color:D.ink, fontWeight:700 }}>{pctBudget}%</span> of income</span>
-                {totalRefunds > 0 && (
-                  <span style={{ color:D.income, fontWeight:700 }}>↩ {fmt(totalRefunds,true)} back</span>
-                )}
-              </div>
-            </div>
-          )}
-
           {/* Period chips */}
-          <PeriodChips/>
+          <div style={{ marginTop:16 }}>
+            <PeriodChips/>
+          </div>
 
           {/* Month nav */}
           {period === "M" && (
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:14, marginTop:14 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:14, marginTop:12 }}>
               <button onClick={() => shiftMonth(-1)} style={{ width:32, height:32, borderRadius:10,
-                background:D.cream2, border:`1px solid ${D.line}`, cursor:"pointer", fontSize:16, color:D.ink }}>‹</button>
+                background:D.white, border:`1px solid ${D.line}`, cursor:"pointer", fontSize:16, color:D.ink }}>‹</button>
               <span style={{ fontSize:14, fontWeight:700, color:D.ink }}>{MONTH_NAMES[viewMonth-1]} {viewYear}</span>
               <button onClick={() => shiftMonth(1)} style={{ width:32, height:32, borderRadius:10,
-                background:D.cream2, border:`1px solid ${D.line}`, cursor:"pointer", fontSize:16, color:D.ink }}>›</button>
+                background:D.white, border:`1px solid ${D.line}`, cursor:"pointer", fontSize:16, color:D.ink }}>›</button>
             </div>
           )}
         </div>
 
         <div style={{ padding:"14px 14px 0" }}>
-          {/* Privacy banner */}
-          <button onClick={() => setShowPrivacy(true)} style={{
-            width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between",
-            background:D.cream2, border:`1px solid ${D.line}`, borderRadius:14,
-            padding:"10px 14px", marginBottom:14, cursor:"pointer", textAlign:"left",
-          }}>
-            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-              <span style={{ fontSize:13 }}>🔒</span>
-              <span style={{ color:D.income, fontSize:11, fontWeight:700 }}>Privacy Protected</span>
-              <span style={{ color:D.ink4, fontSize:11 }}>· {blockedCount} blocked</span>
+          {/* ── Hero card ── */}
+          <div style={{ background:D.white, borderRadius:D.rLg, border:`1px solid ${D.line}`,
+            boxShadow:D.card, padding:"20px 20px 20px", marginBottom:10 }}>
+            {/* Top row: label + saved pill */}
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
+              <div style={{ fontSize:10, letterSpacing:"0.12em", textTransform:"uppercase",
+                color:D.ink3, fontWeight:700 }}>Total spent · {periodLabel}</div>
+              {saved >= 0 && budget > 0 && (
+                <div style={{ display:"inline-flex", alignItems:"center", gap:4,
+                  padding:"5px 10px", borderRadius:999, fontSize:11, fontWeight:700,
+                  background:D.incomeSoft, color:D.income }}>
+                  ↑ {fmt(Math.abs(saved),true)} saved
+                </div>
+              )}
+              {saved < 0 && (
+                <div style={{ display:"inline-flex", alignItems:"center", gap:4,
+                  padding:"5px 10px", borderRadius:999, fontSize:11, fontWeight:700,
+                  background:"#fbe6ea", color:D.quick }}>
+                  ↓ {fmt(Math.abs(saved),true)} over
+                </div>
+              )}
             </div>
-            <span style={{ color:D.ink4, fontSize:11 }}>tap ›</span>
-          </button>
-
-          {/* Summary tiles */}
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:14 }}>
-            {[
-              { label:"Income this period", val:totalIncome, color:D.income, bg:D.incomeSoft },
-              { label:"Total spent",         val:spent,       color:D.ink,    bg:D.cream2     },
-            ].map(({ label, val, color, bg }) => (
-              <div key={label} style={{ background:bg, borderRadius:18, padding:"16px 16px" }}>
-                <div style={{ fontSize:10, fontWeight:700, letterSpacing:"0.08em",
-                  textTransform:"uppercase", color, marginBottom:8 }}>{label}</div>
-                <div style={{ fontSize:22, fontWeight:800, color:D.ink, letterSpacing:"-0.025em" }}>{fmt(val)}</div>
-              </div>
-            ))}
+            {/* Big amount */}
+            <div style={{ fontSize:46, fontWeight:800, lineHeight:1, color:D.ink, letterSpacing:"-0.03em", marginBottom:16 }}>
+              {fmt(spent)}
+            </div>
+            {/* Progress bar */}
+            {budget > 0 && (
+              <>
+                <div style={{ height:8, borderRadius:4, background:D.cream3, overflow:"hidden", marginBottom:8 }}>
+                  <div style={{ width:`${pctBudget}%`, height:"100%", borderRadius:4,
+                    background: pctBudget > 90 ? D.quick : D.ink,
+                    transition:"width 800ms cubic-bezier(.2,.8,.2,1)" }}/>
+                </div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, color:D.ink3 }}>
+                  <span><span style={{ color:D.ink, fontWeight:700 }}>{pctBudget}%</span> of {fmt(budget,true)} budget</span>
+                  <span style={{ color:D.ink3 }}>{fmt(budgetLeft,true)} left · {daysLeft}d</span>
+                </div>
+              </>
+            )}
           </div>
+
+          {/* ── Income + Spent tiles ── */}
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:10 }}>
+            <div style={{ background:D.white, borderRadius:18, border:`1px solid ${D.line}`, padding:"16px 16px" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:8 }}>
+                <span style={{ width:8, height:8, borderRadius:2, background:D.income, flexShrink:0 }}/>
+                <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.08em",
+                  textTransform:"uppercase", color:D.income }}>Income</span>
+              </div>
+              <div style={{ fontSize:24, fontWeight:800, color:D.ink, letterSpacing:"-0.025em" }}>{fmt(totalIncome,true)}</div>
+            </div>
+            <div style={{ background:D.white, borderRadius:18, border:`1px solid ${D.line}`, padding:"16px 16px" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:8 }}>
+                <span style={{ width:8, height:8, borderRadius:2, background:D.ink, flexShrink:0 }}/>
+                <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.08em",
+                  textTransform:"uppercase", color:D.ink3 }}>Spent</span>
+              </div>
+              <div style={{ fontSize:24, fontWeight:800, color:D.ink, letterSpacing:"-0.025em" }}>{fmt(spent,true)}</div>
+            </div>
+          </div>
+
+          {/* ── Refunds banner ── */}
+          {totalRefunds > 0 && (
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between",
+              background:D.incomeSoft, borderRadius:14, padding:"13px 16px", marginBottom:10,
+              border:`1px solid ${D.income}22` }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                <span style={{ fontSize:14 }}>↺</span>
+                <span style={{ fontSize:13, fontWeight:600, color:D.income }}>Refunds & cashbacks received</span>
+              </div>
+              <span style={{ fontSize:14, fontWeight:800, color:D.income }}>+{fmt(totalRefunds,true)}</span>
+            </div>
+          )}
 
           {/* Where it went */}
           {totalDebited > 0 && catRows.length > 0 && (
@@ -913,26 +934,38 @@ export default function App() {
             </div>
           )}
 
-          {/* Tag chart */}
+          {/* By Tag */}
           {tagChartData.length > 0 && (
             <div style={{ background:D.white, borderRadius:D.rLg, border:`1px solid ${D.line}`,
-              padding:"18px 16px", marginBottom:14, boxShadow:D.card }}>
-              <div style={{ fontSize:11, letterSpacing:"0.12em", textTransform:"uppercase",
-                color:D.ink3, fontWeight:700, marginBottom:14 }}>
-                Spending by tag
+              padding:"18px 16px 14px", marginBottom:14, boxShadow:D.card }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:4 }}>
+                <div style={{ fontSize:11, letterSpacing:"0.12em", textTransform:"uppercase",
+                  color:D.ink3, fontWeight:700 }}>By Tag</div>
+                <button onClick={() => setShowTagMgr(true)} style={{ fontSize:12, fontWeight:600,
+                  color:D.ink3, background:"none", border:"none", cursor:"pointer" }}>Manage</button>
               </div>
-              <ResponsiveContainer width="100%" height={tagChartData.length*36+8}>
-                <BarChart data={tagChartData} layout="vertical" margin={{top:0,right:54,bottom:0,left:0}}>
-                  <XAxis type="number" hide/>
-                  <YAxis type="category" dataKey="name" axisLine={false} tickLine={false}
-                    tick={{fill:D.ink3,fontSize:12,fontFamily:"Inter Tight, sans-serif"}} width={72}/>
-                  <Tooltip formatter={v => fmt(v)} cursor={{fill:"rgba(79,85,199,.05)"}}/>
-                  <Bar dataKey="amt" fill={D.misc} radius={[0,6,6,0]} barSize={12}>
-                    <LabelList dataKey="amt" position="right" formatter={v=>fmt(v,true)}
-                      style={{fill:D.ink3,fontSize:10}}/>
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              <div style={{ fontSize:12, color:D.ink4, fontWeight:500, marginBottom:14 }}>
+                Top {Math.min(5, tagChartData.length)} this {period === "M" ? "month" : "period"}
+              </div>
+              {tagChartData.slice(0,5).map((row, i) => {
+                const maxAmt = tagChartData[0].amt;
+                const pct = Math.round((row.amt / maxAmt) * 100);
+                return (
+                  <div key={row.name} style={{ display:"flex", alignItems:"center", gap:12,
+                    marginBottom: i < Math.min(4, tagChartData.length-1) ? 12 : 0 }}>
+                    <div style={{ width:72, fontSize:13, fontWeight:600, color:D.ink,
+                      flexShrink:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      #{row.name}
+                    </div>
+                    <div style={{ flex:1, height:6, borderRadius:3, background:D.cream3, overflow:"hidden" }}>
+                      <div style={{ width:`${pct}%`, height:"100%", borderRadius:3, background:D.ink,
+                        transition:"width 600ms cubic-bezier(.2,.8,.2,1)" }}/>
+                    </div>
+                    <div style={{ width:42, fontSize:12, fontWeight:700, color:D.ink,
+                      textAlign:"right", flexShrink:0 }}>{fmt(row.amt,true)}</div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -945,6 +978,11 @@ export default function App() {
   // ══════════════════════════════════════════════════════════════════════
   const OverviewTab = () => {
     const [filter, setFilter] = useState("all");
+    const chipRowRef = React.useRef(null);
+    const setFilterAndScroll = (key) => {
+      setFilter(key);
+      if (chipRowRef.current) chipRowRef.current.scrollLeft = 0;
+    };
 
     const CAT_FILTER_MAP = { income:"income", cc:"creditcard", quick:"quickcart", invest:"investments", misc:"miscellaneous" };
 
@@ -983,10 +1021,11 @@ export default function App() {
     return (
       <div style={{ height:"100%", display:"flex", flexDirection:"column", ...F }}>
         {/* Header */}
-        <div style={{ padding:"52px 20px 0", background:D.cream }}>
+        <div style={{ padding:"52px 20px 12px", background:D.cream }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", marginBottom:14 }}>
             <div>
-              <div style={{ fontSize:28, fontWeight:800, color:D.ink, letterSpacing:"-0.02em" }}>Overview</div>
+              <div style={{ fontSize:28, fontWeight:800, color:D.ink, letterSpacing:"-0.02em",
+                fontFamily:"'Inter Tight','Inter',system-ui,sans-serif" }}>Overview</div>
               <div style={{ fontSize:12, color:D.ink3, fontWeight:500, marginTop:3 }}>
                 {periodLabel} · {filtered.length} transactions
               </div>
@@ -997,9 +1036,9 @@ export default function App() {
             </div>
           </div>
           {/* Filter chips */}
-          <div className="ns" style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:14 }}>
+          <div ref={chipRowRef} className="ns" style={{ display:"flex", gap:6, overflowX:"auto", paddingBottom:14 }}>
             {filterDefs.map(f => (
-              <button key={f.key} onClick={() => setFilter(f.key)} style={{
+              <button key={f.key} onClick={() => setFilterAndScroll(f.key)} style={{
                 height:32, padding:"0 12px", borderRadius:999, flexShrink:0,
                 fontSize:12, fontWeight:600, letterSpacing:"-0.01em",
                 border:`1px solid ${filter===f.key ? D.ink : D.line2}`,
@@ -1056,7 +1095,7 @@ export default function App() {
                               {t.isRefund ? (
                                 <span style={{ fontSize:10, padding:"2px 6px", borderRadius:4,
                                   background:D.incomeSoft, color:D.income, fontWeight:700,
-                                  letterSpacing:"0.04em", whiteSpace:"nowrap" }}>↩ Refund</span>
+                                  letterSpacing:"0.04em", whiteSpace:"nowrap", display:"inline-flex", alignItems:"center", gap:3 }}>↺ Refund</span>
                               ) : t.isSalary ? (
                                 <span style={{ fontSize:10, padding:"2px 6px", borderRadius:4,
                                   background:D.incomeSoft, color:D.income, fontWeight:700 }}>Salary</span>
@@ -1064,7 +1103,6 @@ export default function App() {
                                 <span style={{ fontSize:11, color:c.color, fontWeight:600, whiteSpace:"nowrap" }}>{c.name}</span>
                               )}
                               {t.tag && <span style={{ fontSize:11, color:D.ink4, whiteSpace:"nowrap" }}>· #{t.tag}</span>}
-                              <span style={{ fontSize:11, color:D.ink4, whiteSpace:"nowrap" }}>· {t.date}</span>
                             </div>
                           </div>
                           <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:4, flexShrink:0 }}>
@@ -1285,7 +1323,10 @@ export default function App() {
                   overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                   {t.brand||t.bank}
                 </div>
-                <div style={{ fontSize:11, color:D.ink4, marginTop:2 }}>{t.date}</div>
+                <div style={{ display:"flex", alignItems:"center", gap:5, marginTop:2 }}>
+                  {t.tag && <span style={{ fontSize:11, color:D.ink3, fontWeight:600 }}>#{t.tag}</span>}
+                  <span style={{ fontSize:11, color:D.ink4 }}>{t.tag ? "· " : ""}{t.date}</span>
+                </div>
               </div>
               <div style={{ fontSize:15, fontWeight:700, color:D.ink, letterSpacing:"-0.01em" }}>
                 −{fmt(t.amount)}
