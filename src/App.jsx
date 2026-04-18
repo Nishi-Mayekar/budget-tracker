@@ -21,27 +21,62 @@ const SmsNative = registerPlugin("Sms");
 // ══════════════════════════════════════════════════════════════════════════
 //  SECURITY ENGINE — OTP / sensitive message blocker
 // ══════════════════════════════════════════════════════════════════════════
+// ── Hard-blocked: messages containing ANY of these are dropped immediately,
+//    raw text is never read, no field is extracted, nothing is stored.
 const BLOCKED_PATTERNS = [
-  /\botp\b/i, /one[\s-]?time[\s-]?pass(word)?/i,
-  /verification\s*code/i, /\bauth(entication)?\s*code/i,
-  /login\s*(code|otp|pin)/i, /\bsecure\s*(code|pin|otp)\b/i,
-  /do\s*not\s*share/i, /never\s*share/i,
-  /valid\s*for\s*\d+\s*min/i, /expire[sd]?\s*in\s*\d+/i,
-  /\d{4,8}\s*is\s*your/i, /\bcode\s*[:\-–]\s*\d{4,8}/i,
-  /\byour\s*(otp|code|pin)\s*(is|:)/i,
-  /\bpin\b/i, /\bcvv\b/i, /\bpassword\b/i,
-  /\bsecurity\s*(code|number|key)\b/i, /\bsecret\s*(code|key|word)\b/i,
-  /login\s*attempt/i, /sign[\s-]?in\s*attempt/i,
-  /access\s*attempt/i, /\bpasscode\b/i, /\bverif(y|ication|ied)\b/i,
-  /2fa/i, /two[\s-]?factor/i, /multi[\s-]?factor/i,
-  /\bfraud\s*alert\b/i, /suspicious\s*(activity|transaction)/i,
-  /unauthori[sz]ed/i,
+  // OTP / verification codes
+  /\botp\b/i,
+  /one[\s-]?time[\s-]?pass(word|code)?/i,
+  /verification\s*code/i,
+  /\bauth(entication)?\s*(code|otp)\b/i,
+  /login\s*(code|otp|pin)/i,
+  /\bsecure\s*(code|otp|pin)\b/i,
+  /do\s*not\s*share/i,
+  /never\s*share/i,
+  /valid\s*(only\s*)?for\s*\d+\s*min/i,
+  /expire[sd]?\s*in\s*\d+/i,
+  /\d{4,8}\s*is\s*your\b/i,
+  /\bcode\s*[:\-–]\s*\d{4,8}/i,
+  /\byour\s*(otp|code|pin|password)\s*(is|:)/i,
+  /\bpasscode\b/i,
+  /\bverif(y|ication|ied)\b/i,
+  /2fa/i,
+  /two[\s-]?factor/i,
+  /multi[\s-]?factor/i,
+  // Sensitive card / account fields
+  /\bcvv\b/i,
+  /\bpin\b/i,
+  /\bpassword\b/i,
+  /\bsecurity\s*(code|number|key|question)\b/i,
+  /\bsecret\s*(code|key|word|phrase)\b/i,
+  // 16-digit card number pattern (any spacing)
+  /\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b/,
+  // Security alerts that may embed sensitive context
+  /\bfraud\s*alert\b/i,
+  /suspicious\s*(activity|login|transaction)/i,
+  /unauthori[sz]ed\s*(access|transaction|login)/i,
+  /login\s*attempt/i,
+  /sign[\s-]?in\s*attempt/i,
+  /access\s*attempt/i,
 ];
 
-function isTransactionMessage(raw) {
+// ── Personal message guard: messages from phone numbers (not bank/merchant
+//    alphanumeric sender IDs) are personal texts — never process them.
+function isPersonalSender(address) {
+  if (!address) return false;
+  // Phone number = starts with + or is purely digits (possibly with spaces/dashes)
+  return /^[+\d][\d\s\-]{5,}$/.test(address.trim());
+}
+
+function isTransactionMessage(raw, senderAddress) {
   if (!raw || typeof raw !== "string") return false;
-  if (!(/(?:₹[\s\d,]|Rs\.?\s*[\d,])/.test(raw))) return false;
-  if (!(/\b(credited|debited|spent|charged|used\s+for|purchase[d]?|transaction)\b/i.test(raw))) return false;
+  // Block personal SMS senders (phone numbers)
+  if (isPersonalSender(senderAddress)) return false;
+  // Must contain a currency amount
+  if (!(/(?:INR|₹|Rs\.?)\s*[\d,]+/.test(raw))) return false;
+  // Must contain at least one transaction verb
+  if (!(/\b(credited|debited|spent|charged|used\s+for|purchase[d]?|transaction|transfer(?:red)?|deducted|debit|paid)\b/i.test(raw))) return false;
+  // Drop if any blocked pattern matches
   return !BLOCKED_PATTERNS.some(p => p.test(raw));
 }
 
@@ -66,11 +101,22 @@ const INVESTMENT_BRANDS = [
 ];
 
 const INV_REGEX = new RegExp(
-  INVESTMENT_BRANDS.map(b => `\\b${b.replace(/[-\s]/g, "[\\s-]?")}\\b`).join("|"), "i"
+  INVESTMENT_BRANDS.map(b => b.replace(/[-\s]/g, "[\\s\\-]?")).join("|"), "i"
 );
 function detectInvestmentBrand(raw) {
   const m = raw.match(INV_REGEX);
   if (m) return m[0];
+  // Handle "transfer to/from GROWW/growwo" variants
+  const transferMatch = raw.match(/transfer(?:red)?\s+(?:to|from)\s+([A-Za-z][A-Za-z\s]{1,20}?)(?:[\/\s,\.]|$)/i);
+  if (transferMatch) {
+    const name = transferMatch[1].trim();
+    if (/grow[wo]/i.test(name)) return "Groww";
+    if (/zerodha/i.test(name)) return "Zerodha";
+    if (/kuvera/i.test(name)) return "Kuvera";
+    if (/upstox/i.test(name)) return "Upstox";
+    if (/ind\s*money/i.test(name)) return "INDmoney";
+    if (/angel\s*one/i.test(name)) return "Angel One";
+  }
   if (/\bSIP\b.*\b(?:mandate|debit|amount|auto)\b|\bNACH\b.*\b(?:SIP|mutual\s*fund|MF)\b|\bmutual\s*fund\s*SIP\b|\bMF\s*(?:SIP|debit|auto)\b/i.test(raw))
     return "SIP / MF";
   return null;
@@ -83,6 +129,31 @@ function detectBrand(raw) {
   const m = raw.match(BRAND_REGEX);
   return m ? m[0] : null;
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+//  BRAND → TAG MAP  (deterministic, no free-text needed)
+// ══════════════════════════════════════════════════════════════════════════
+const BRAND_TAG_MAP = {
+  // Food delivery
+  "Zomato": "Food", "Swiggy": "Food",
+  // Grocery
+  "Blinkit": "Grocery", "Instamart": "Grocery", "Swiggy Instamart": "Grocery",
+  "BigBasket": "Grocery", "Zepto": "Grocery", "JioMart": "Grocery",
+  "Dunzo": "Grocery", "Amazon Fresh": "Grocery",
+  // Investments
+  "Groww": "SIP", "Zerodha": "SIP", "Kuvera": "SIP", "ET Money": "SIP",
+  "INDmoney": "SIP", "Paytm Money": "SIP", "Upstox": "Stocks",
+  "Angel One": "Stocks", "AngelOne": "Stocks", "5paisa": "Stocks",
+  "Dhan": "Stocks", "HDFC Securities": "Stocks", "SIP / MF": "SIP",
+  // Shopping
+  "Amazon": "Shopping", "Flipkart": "Shopping", "Myntra": "Shopping",
+  "Ajio": "Shopping", "Meesho": "Shopping", "Nykaa": "Shopping",
+  // Entertainment
+  "Netflix": "Subscriptions", "Spotify": "Subscriptions",
+  "BookMyShow": "Entertainment", "District": "Entertainment",
+  // Pharma
+  "PharmEasy": "Health", "1mg": "Health", "Medlife": "Health",
+};
 
 // ══════════════════════════════════════════════════════════════════════════
 //  UPI NARRATION AUTO-TAGGER
@@ -131,20 +202,32 @@ function narrationToTag(raw) {
 }
 
 // ── Secure parser ─────────────────────────────────────────────────────────
+// What this reads:   ₹ amount, credited/debited direction, allowlisted brand name
+// What this NEVER stores: raw SMS text, account numbers, card numbers,
+//   UPI IDs, personal names, bank reference numbers, balances, phone numbers.
 function secureExtract(raw) {
-  const amtMatch = raw.match(/(?:₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)/i);
+  // Scrub the raw string before any matching — replace account/card patterns
+  // with placeholders so they can never leak into any field.
+  const scrubbed = raw
+    .replace(/\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b/g, "[CARD]")  // 16-digit card
+    .replace(/[Aa][Cc](?:count)?\s*(?:no\.?\s*)?[Xx*]{2,}\d{2,6}/g, "[AC]") // Ac XX1234
+    .replace(/\b\d{9,18}\b/g, "[NUM]")                                        // long numbers
+    .replace(/[\w.\-]+@[\w.\-]+/g, "[UPI]");                                  // UPI ID (email-style)
+
+  const amtMatch = scrubbed.match(/(?:INR|₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)/i);
   if (!amtMatch) return null;
   const amount = Math.round(parseFloat(amtMatch[1].replace(/,/g, "")) * 100) / 100;
-  if (!isFinite(amount) || amount <= 0) return null;
+  if (!isFinite(amount) || amount <= 0 || amount > 10000000) return null; // sanity cap 1Cr
 
-  const isCredit   = /\bcredited\b/i.test(raw);
-  const isRefund   = /\b(refund|reversal|cashback|cash\s*back|reversed|returned)\b/i.test(raw);
-  const type       = (isCredit || isRefund) ? "credited" : "debited";
+  const isCredit    = /\bcredited\b/i.test(scrubbed);
+  const isRefund    = /\b(refund|reversal|cashback|cash\s*back|reversed|returned)\b/i.test(scrubbed);
+  const type        = (isCredit || isRefund) ? "credited" : "debited";
   const isRefundTxn = isRefund;
 
-  const isCreditCard = /credit[\s\-]?card|cc\s+(ending|no|limit|card)|credit\s*a\/c/i.test(raw);
-  const brand    = detectBrand(raw);
-  const invBrand = detectInvestmentBrand(raw);
+  const isCreditCard = /credit[\s\-]?card|cc\s+(ending|no|limit|card)|credit\s*a\/c/i.test(scrubbed);
+  // Brand detection runs on SCRUBBED text (no raw account data)
+  const brand    = detectBrand(scrubbed);
+  const invBrand = detectInvestmentBrand(scrubbed);
 
   let category;
   if      (type === "credited") category = "income";
@@ -153,13 +236,14 @@ function secureExtract(raw) {
   else if (brand)               category = "quickcart";
   else                          category = "miscellaneous";
 
+  // Only allowlisted brand name is stored — never raw text, account info, or personal data
   return { amount, type, category, brand: brand || invBrand, isCreditCard, isRefund: isRefundTxn };
 }
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 function processSMS(sms) {
-  if (!isTransactionMessage(sms.raw)) return null;
+  if (!isTransactionMessage(sms.raw, sms.bank)) return null;
   const parsed = secureExtract(sms.raw);
   if (!parsed) return null;
 
@@ -177,7 +261,26 @@ function processSMS(sms) {
     monthKey   = `${year}-${String(month).padStart(2, "0")}`;
   }
 
-  const suggestedTag = parsed.type === "debited" ? narrationToTag(sms.raw) : null;
+  let suggestedTag = null;
+  if (parsed.type === "debited") {
+    // 1. Brand-based (deterministic, highest confidence, no raw text read)
+    const brandKey = Object.keys(BRAND_TAG_MAP).find(k =>
+      parsed.brand && parsed.brand.toLowerCase().includes(k.toLowerCase())
+    );
+    if (brandKey) {
+      suggestedTag = BRAND_TAG_MAP[brandKey];
+    } else if (parsed.category === "investments") {
+      suggestedTag = "SIP";
+    } else {
+      // 2. UPI narration keyword match (runs on scrubbed raw — no account data)
+      suggestedTag = narrationToTag(sms.raw);
+      // 3. Heuristic: small misc amount with no brand → likely auto/transit
+      if (!suggestedTag && parsed.category === "miscellaneous" && parsed.amount <= 500) {
+        suggestedTag = "Transit";
+      }
+    }
+  }
+  // Raw SMS text is never stored in the returned object
   return { id: sms.id, date: sms.date, bank: sms.bank, monthKey, year, ...parsed, suggestedTag, tag: null };
 }
 
@@ -721,6 +824,14 @@ export default function App() {
       { key:"quick", internal:"quickcart",     total:totalQuick },
     ].filter(c => c.total > 0);
 
+    // QuickCart sub-breakdown
+    const FOOD_BRANDS    = ["Zomato","Swiggy"];
+    const GROCERY_BRANDS = ["Blinkit","Instamart","BigBasket","Zepto","JioMart","Dunzo","Amazon Fresh","Swiggy Instamart"];
+    const qcTxns = periodTxns.filter(t => t.category === "quickcart" && t.type === "debited");
+    const qcFood  = qcTxns.filter(t => FOOD_BRANDS.some(b => (t.brand||"").toLowerCase().includes(b.toLowerCase()))).reduce((s,t)=>s+t.amount,0);
+    const qcGrocery = qcTxns.filter(t => GROCERY_BRANDS.some(b => (t.brand||"").toLowerCase().includes(b.toLowerCase()))).reduce((s,t)=>s+t.amount,0);
+    const qcOther = totalQuick - qcFood - qcGrocery;
+
     const nextPayday = () => {
       if (!salary.day) return null;
       const d = new Date();
@@ -886,29 +997,63 @@ export default function App() {
                 const count = periodTxns.filter(t => t.category===row.internal).length;
                 const isLast = idx === catRows.length-1;
                 return (
-                  <button key={row.key} onClick={() => setShowDrill(row.internal)} style={{
-                    width:"100%", display:"flex", alignItems:"center", gap:14,
-                    padding:"15px 20px", textAlign:"left", background:"transparent",
-                    borderTop: idx===0 ? "none" : `1px solid ${D.line}`,
-                    borderBottom:"none", border:"none",
-                    borderTop: idx===0 ? "none" : `1px solid ${D.line}`,
-                    cursor:"pointer",
-                  }}>
-                    <CatIcon catKey={row.internal} size={44}/>
-                    <div style={{ flex:1, minWidth:0 }}>
-                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:8 }}>
-                        <div style={{ fontSize:15, fontWeight:600, color:D.ink }}>{c.name}</div>
-                        <div style={{ fontSize:17, fontWeight:800, color:D.ink, letterSpacing:"-0.02em" }}>{fmt(row.total)}</div>
-                      </div>
-                      <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                        <div style={{ flex:1, height:5, borderRadius:3, background:D.cream3, overflow:"hidden" }}>
-                          <div style={{ width:`${pct}%`, height:"100%", borderRadius:3, background:c.color }}/>
+                  <div key={row.key} style={{ borderTop: idx===0 ? "none" : `1px solid ${D.line}` }}>
+                    <button onClick={() => setShowDrill(row.internal)} style={{
+                      width:"100%", display:"flex", alignItems:"center", gap:14,
+                      padding:"15px 20px", textAlign:"left", background:"transparent",
+                      border:"none", cursor:"pointer",
+                    }}>
+                      <CatIcon catKey={row.internal} size={44}/>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:8 }}>
+                          <div style={{ fontSize:15, fontWeight:600, color:D.ink }}>{c.name}</div>
+                          <div style={{ fontSize:17, fontWeight:800, color:D.ink, letterSpacing:"-0.02em" }}>{fmt(row.total)}</div>
                         </div>
-                        <div style={{ fontSize:11, color:D.ink4, fontWeight:600, minWidth:26, textAlign:"right" }}>{pct}%</div>
+                        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                          <div style={{ flex:1, height:5, borderRadius:3, background:D.cream3, overflow:"hidden" }}>
+                            <div style={{ width:`${pct}%`, height:"100%", borderRadius:3, background:c.color }}/>
+                          </div>
+                          <div style={{ fontSize:11, color:D.ink4, fontWeight:600, minWidth:26, textAlign:"right" }}>{pct}%</div>
+                        </div>
+                        <div style={{ fontSize:11, color:D.ink4, marginTop:4 }}>{count} transaction{count!==1?"s":""}</div>
                       </div>
-                      <div style={{ fontSize:11, color:D.ink4, marginTop:4 }}>{count} transaction{count!==1?"s":""}</div>
-                    </div>
-                  </button>
+                    </button>
+                    {/* QuickCart sub-breakdown */}
+                    {row.key === "quick" && totalQuick > 0 && (qcFood > 0 || qcGrocery > 0) && (
+                      <div style={{ margin:"0 20px 14px", padding:"10px 14px",
+                        background:D.cream2, borderRadius:12, display:"flex", flexDirection:"column", gap:8 }}>
+                        {qcFood > 0 && (
+                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                              <span style={{ fontSize:14 }}>🍱</span>
+                              <span style={{ fontSize:12, fontWeight:600, color:D.ink3 }}>Quick Food</span>
+                              <span style={{ fontSize:11, color:D.ink4 }}>Zomato · Swiggy</span>
+                            </div>
+                            <span style={{ fontSize:13, fontWeight:700, color:D.ink }}>{fmt(qcFood,true)}</span>
+                          </div>
+                        )}
+                        {qcGrocery > 0 && (
+                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                              <span style={{ fontSize:14 }}>🛒</span>
+                              <span style={{ fontSize:12, fontWeight:600, color:D.ink3 }}>Grocery</span>
+                              <span style={{ fontSize:11, color:D.ink4 }}>Blinkit · BigBasket · Zepto</span>
+                            </div>
+                            <span style={{ fontSize:13, fontWeight:700, color:D.ink }}>{fmt(qcGrocery,true)}</span>
+                          </div>
+                        )}
+                        {qcOther > 0 && (
+                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                              <span style={{ fontSize:14 }}>📦</span>
+                              <span style={{ fontSize:12, fontWeight:600, color:D.ink3 }}>Other</span>
+                            </div>
+                            <span style={{ fontSize:13, fontWeight:700, color:D.ink }}>{fmt(qcOther,true)}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
