@@ -100,6 +100,43 @@ const INVESTMENT_BRANDS = [
   "Coin by Zerodha",
 ];
 
+const INSURANCE_BRANDS = [
+  "Tata AIA", "LIC", "HDFC Life", "HDFC Ergo", "SBI Life",
+  "ICICI Prudential", "ICICI Lombard", "Max Life", "Bajaj Allianz",
+  "Aditya Birla Sun Life", "ABSLI", "Kotak Life", "PNB MetLife",
+  "Reliance Life", "Reliance Nippon", "Edelweiss Tokio", "Future Generali",
+  "Canara HSBC", "IndiaFirst Life", "Niva Bupa", "Star Health",
+  "Care Health", "Digit Insurance", "Acko", "Go Digit",
+];
+const INSURANCE_REGEX = new RegExp(
+  INSURANCE_BRANDS.map(b => b.replace(/[-\s]/g, "[\\s\\-]?")).join("|"), "i"
+);
+
+// UPI VPA handle → brand (catches groww@axisb, swiggy@icici etc.)
+const UPI_VPA_BRANDS = {
+  groww: "Groww", grow: "Groww", growwmf: "Groww",
+  zerodha: "Zerodha", kuvera: "Kuvera", upstox: "Upstox",
+  zomato: "Zomato", swiggy: "Swiggy", swiggyin: "Swiggy",
+  blinkit: "Blinkit", zepto: "Zepto", bigbasket: "BigBasket",
+  jiomart: "JioMart", amazon: "Amazon", flipkart: "Flipkart",
+  tataaialife: "Tata AIA", tataaig: "Tata AIA",
+  licpremium: "LIC", lic: "LIC",
+};
+function detectBrandFromVPA(raw) {
+  const m = raw.match(/([\w.\-]+)@[\w.\-]+/);
+  if (!m) return null;
+  const handle = m[1].toLowerCase().replace(/[.\-]/g, "");
+  return UPI_VPA_BRANDS[handle] || null;
+}
+
+function detectInsuranceBrand(raw) {
+  const m = raw.match(INSURANCE_REGEX);
+  if (m) return m[0];
+  if (/\b(life\s*insurance|health\s*insurance|term\s*plan|premium\s*due|policy\s*premium|motor\s*insurance)\b/i.test(raw))
+    return "Insurance";
+  return null;
+}
+
 const INV_REGEX = new RegExp(
   INVESTMENT_BRANDS.map(b => b.replace(/[-\s]/g, "[\\s\\-]?")).join("|"), "i"
 );
@@ -153,6 +190,12 @@ const BRAND_TAG_MAP = {
   "BookMyShow": "Entertainment", "District": "Entertainment",
   // Pharma
   "PharmEasy": "Health", "1mg": "Health", "Medlife": "Health",
+  // Insurance
+  "Tata AIA": "Insurance", "LIC": "Insurance", "HDFC Life": "Insurance",
+  "HDFC Ergo": "Insurance", "SBI Life": "Insurance", "ICICI Prudential": "Insurance",
+  "ICICI Lombard": "Insurance", "Max Life": "Insurance", "Bajaj Allianz": "Insurance",
+  "Star Health": "Insurance", "Care Health": "Insurance", "Digit Insurance": "Insurance",
+  "Acko": "Insurance", "Niva Bupa": "Insurance", "Insurance": "Insurance",
 };
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -206,41 +249,43 @@ function narrationToTag(raw) {
 // What this NEVER stores: raw SMS text, account numbers, card numbers,
 //   UPI IDs, personal names, bank reference numbers, balances, phone numbers.
 function secureExtract(raw) {
-  // Scrub the raw string before any matching — replace account/card patterns
-  // with placeholders so they can never leak into any field.
+  // ── Step 1: Brand detection on RAW text first (whitelist-only regex, safe) ──
+  // Must happen before scrubbing because UPI VPAs like "groww@axisb" get
+  // replaced by [UPI] and the brand would be lost.
+  const brand       = detectBrand(raw) || detectBrandFromVPA(raw);
+  const invBrand    = detectInvestmentBrand(raw) || (detectBrandFromVPA(raw) && INVESTMENT_BRANDS.some(b => b.toLowerCase() === (detectBrandFromVPA(raw)||"").toLowerCase()) ? detectBrandFromVPA(raw) : null);
+  const insureBrand = detectInsuranceBrand(raw);
+
+  // ── Step 2: Scrub sensitive data before reading anything else ──
   const scrubbed = raw
     .replace(/\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b/g, "[CARD]")  // 16-digit card
     .replace(/[Aa][Cc](?:count)?\s*(?:no\.?\s*)?[Xx*]{2,}\d{2,6}/g, "[AC]") // Ac XX1234
-    .replace(/\b\d{9,18}\b/g, "[NUM]")                                        // long numbers
-    .replace(/[\w.\-]+@[\w.\-]+/g, "[UPI]");                                  // UPI ID (email-style)
+    .replace(/\b\d{9,18}\b/g, "[NUM]")                                        // long account numbers
+    .replace(/[\w.\-]+@[\w.\-]+/g, "[UPI]");                                  // UPI VPA
 
+  // ── Step 3: Extract amount from scrubbed ──
   const amtMatch = scrubbed.match(/(?:INR|₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)/i);
   if (!amtMatch) return null;
   const amount = Math.round(parseFloat(amtMatch[1].replace(/,/g, "")) * 100) / 100;
-  if (!isFinite(amount) || amount <= 0 || amount > 10000000) return null; // sanity cap 1Cr
+  if (!isFinite(amount) || amount <= 0 || amount > 10000000) return null;
 
   const isCredit    = /\bcredited\b/i.test(scrubbed);
   const isRefund    = /\b(refund|reversal|cashback|cash\s*back|reversed|returned)\b/i.test(scrubbed);
   const type        = (isCredit || isRefund) ? "credited" : "debited";
   const isRefundTxn = isRefund;
-
   const isCreditCard = /credit[\s\-]?card|cc\s+(ending|no|limit|card)|credit\s*a\/c/i.test(scrubbed);
-  // Brand detection runs on SCRUBBED text (no raw account data)
-  const brand    = detectBrand(scrubbed);
-  const invBrand = detectInvestmentBrand(scrubbed);
 
-  // Priority: known investment brand > known quickcart brand > generic CC > misc
-  // Known brands override credit-card classification so Blinkit/Zomato/Groww
-  // paid via credit card still land in the correct category.
+  // ── Step 4: Category — known brands always override CC classification ──
   let category;
   if      (type === "credited") category = "income";
   else if (invBrand)            category = "investments";   // Groww/Zerodha always → investments
+  else if (insureBrand)         category = "insurance";     // Tata AIA/LIC → insurance
   else if (brand)               category = "quickcart";    // Blinkit/Zomato always → quickcart
   else if (isCreditCard)        category = "creditcard";   // generic CC (no known brand)
   else                          category = "miscellaneous";
 
-  // Only allowlisted brand name is stored — never raw text, account info, or personal data
-  return { amount, type, category, brand: brand || invBrand, isCreditCard, isRefund: isRefundTxn };
+  const finalBrand = brand || invBrand || insureBrand;
+  return { amount, type, category, brand: finalBrand, isCreditCard, isRefund: isRefundTxn };
 }
 
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -322,6 +367,11 @@ const MOCK_SMS_FEED = [
   { id: 43, raw: "₹10,000 debited from Ac xx5678. Info: Groww - Nifty 50 Index Fund SIP", date: "Apr 01", bank: "SBI"   },
   { id: 44, raw: "₹3,000 debited from Ac xx5678. Info: INDmoney US Stock Purchase",       date: "Apr 10", bank: "HDFC"  },
   { id: 48, raw: "₹5,000 debited from Ac xx5678 via NACH for SIP mandate auto-debit",     date: "Apr 05", bank: "SBI"   },
+  { id: 49, raw: "₹8,000 debited from Ac xx5678. Info: UPI/123456/Groww SIP/groww@axisb. Avl Bal:₹50,000", date: "Apr 03", bank: "HDFC" },
+  { id: 50, raw: "₹5,000 debited from Ac xx5678. Info: Transfer to GROWW/growwo. Avl Bal:₹45,000",         date: "Apr 01", bank: "SBI"  },
+  { id: 51, raw: "₹1,500 debited from Ac xx5678. Tata AIA Life Insurance premium Apr 2026",               date: "Apr 07", bank: "HDFC" },
+  { id: 52, raw: "₹2,800 debited from Ac xx5678. HDFC Life Insurance renewal premium deducted",           date: "Apr 06", bank: "HDFC" },
+  { id: 53, raw: "₹999 debited from Ac xx5678. LIC premium auto-debit Apr 2026",                         date: "Apr 02", bank: "SBI"  },
   { id: 45, raw: "₹850 refund credited to Ac xx5678 for Swiggy Order #7892",              date: "Apr 15", bank: "HDFC"  },
   { id: 46, raw: "₹200 cashback credited to Ac xx5678 from Axis Bank Credit Card",        date: "Apr 13", bank: "Axis"  },
   { id: 47, raw: "₹1,200 reversal credited to Ac xx5678 for Amazon return",               date: "Apr 11", bank: "HDFC"  },
@@ -355,6 +405,8 @@ const D = {
   investSoft:  "#dff0f5",
   misc:        "#4f55c7",
   miscSoft:    "#e5e6f6",
+  insure:      "#c45e1a",   // warm amber-orange for insurance
+  insureSoft:  "#faeadf",
   rLg:         24,
   rMd:         18,
   rSm:         12,
@@ -368,11 +420,15 @@ const CATS = {
   cc:      { name: "Credit Card",   emoji: "💳", color: D.cc,      soft: D.ccSoft     },
   quick:   { name: "QuickCart",     emoji: "🛒", color: D.quick,   soft: D.quickSoft  },
   invest:  { name: "Investments",   emoji: "📈", color: D.invest,  soft: D.investSoft },
+  insure:  { name: "Insurance",     emoji: "🛡️", color: D.insure,  soft: D.insureSoft },
   misc:    { name: "Miscellaneous", emoji: "🏷️", color: D.misc,    soft: D.miscSoft   },
 };
 
 // Internal category key → display key
-const CK = k => ({ income:"income", creditcard:"cc", quickcart:"quick", investments:"invest", miscellaneous:"misc" }[k] || "misc");
+const CK = k => ({
+  income:"income", creditcard:"cc", quickcart:"quick",
+  investments:"invest", insurance:"insure", miscellaneous:"misc"
+}[k] || "misc");
 
 // Indian number formatter (supports compact: 1.2L, 45k)
 const fmt = (n, compact = false) => {
@@ -578,6 +634,7 @@ export default function App() {
   const totalCC      = useMemo(() => periodTxns.filter(t => t.category === "creditcard").reduce((s,t) => s+t.amount, 0), [periodTxns]);
   const totalQuick   = useMemo(() => periodTxns.filter(t => t.category === "quickcart").reduce((s,t) => s+t.amount, 0), [periodTxns]);
   const totalInv     = useMemo(() => periodTxns.filter(t => t.category === "investments").reduce((s,t) => s+t.amount, 0), [periodTxns]);
+  const totalInsure  = useMemo(() => periodTxns.filter(t => t.category === "insurance").reduce((s,t) => s+t.amount, 0), [periodTxns]);
   const totalMisc    = useMemo(() => periodTxns.filter(t => t.category === "miscellaneous").reduce((s,t) => s+t.amount, 0), [periodTxns]);
 
   const tagChartData = useMemo(() => {
@@ -822,9 +879,10 @@ export default function App() {
 
     // CC excluded — it's a payment transfer, not real spending
     const catRows = [
-      { key:"misc",  internal:"miscellaneous", total:totalMisc  },
-      { key:"invest",internal:"investments",   total:totalInv   },
-      { key:"quick", internal:"quickcart",     total:totalQuick },
+      { key:"misc",   internal:"miscellaneous", total:totalMisc   },
+      { key:"invest", internal:"investments",   total:totalInv    },
+      { key:"insure", internal:"insurance",     total:totalInsure },
+      { key:"quick",  internal:"quickcart",     total:totalQuick  },
     ].filter(c => c.total > 0);
 
     // QuickCart sub-breakdown
@@ -1135,7 +1193,7 @@ export default function App() {
       if (chipRowRef.current) chipRowRef.current.scrollLeft = 0;
     };
 
-    const CAT_FILTER_MAP = { income:"income", cc:"creditcard", quick:"quickcart", invest:"investments", misc:"miscellaneous" };
+    const CAT_FILTER_MAP = { income:"income", cc:"creditcard", quick:"quickcart", invest:"investments", insure:"insurance", misc:"miscellaneous" };
 
     const filtered = useMemo(() => periodTxns.filter(t => {
       if (filter==="all") return true;
@@ -1162,11 +1220,12 @@ export default function App() {
       { key:"all",    label:"All" },
       { key:"in",     label:"↓ Income", dot:D.income },
       { key:"out",    label:"↑ Expenses" },
-      { key:"income", label:"Income",  dot:D.income },
-      { key:"cc",     label:"CC",      dot:D.cc      },
-      { key:"quick",  label:"Quick",   dot:D.quick   },
-      { key:"invest", label:"Invest",  dot:D.invest  },
-      { key:"misc",   label:"Misc",    dot:D.misc    },
+      { key:"income", label:"Income",    dot:D.income  },
+      { key:"cc",     label:"CC",        dot:D.cc      },
+      { key:"quick",  label:"Quick",     dot:D.quick   },
+      { key:"invest", label:"Invest",    dot:D.invest  },
+      { key:"insure", label:"Insurance", dot:D.insure  },
+      { key:"misc",   label:"Misc",      dot:D.misc    },
     ];
 
     return (
