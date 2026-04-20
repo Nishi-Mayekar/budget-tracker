@@ -213,6 +213,9 @@ const NARRATION_TAG_MAP = [
   { tag: "Rent",          keywords: ["rent","maintenance","society","housing","landlord","flat","deposit","lease"] },
   { tag: "Education",     keywords: ["school","college","fees","education","course","tuition","book","stationery","library","exam"] },
   { tag: "Self Care",     keywords: ["salon","spa","haircut","gym","fitness","yoga","wellness","beauty","parlour","massage"] },
+  { tag: "Maid",          keywords: ["maid","bai","help","househelp","house help","domestic","cleaner","cook","ayah"] },
+  { tag: "Home",          keywords: ["fridge","refrigerator","washing machine","appliance","furniture","sofa","bed","electronics","ac repair","water filter","purifier","microwave"] },
+  { tag: "Parents",       keywords: ["parents","mother","father","mom","dad","amma","appa","nana","nani","dada","dadi","home monthly","family"] },
 ];
 
 function extractUpiNarration(raw) {
@@ -273,13 +276,18 @@ function secureExtract(raw) {
   const isRefund    = /\b(refund|reversal|cashback|cash\s*back|reversed|returned)\b/i.test(scrubbed);
   const type        = (isCredit || isRefund) ? "credited" : "debited";
   const isRefundTxn = isRefund;
-  const isCreditCard = /credit[\s\-]?card|cc\s+(ending|no|limit|card)|credit\s*a\/c/i.test(scrubbed);
+  const isCreditCard = /credit[\s\-]?card|cc\s+(ending|no|limit|card)|credit\s*a\/c|\bscapia\b/i.test(scrubbed);
+
+  // Family transfer detection — narration contains family keywords
+  const narrationLower = (raw.match(/(?:info|remarks?|note|upi\/\d+\/[^\/]+\/)([^\n,\.@]{3,40})/i)||[])[1]?.toLowerCase() || "";
+  const isFamilyTransfer = /\b(parents?|mother|father|mom|dad|amma|appa|nana|nani|dada|dadi|bhaiya|didi|sister|brother|wife|husband)\b/i.test(narrationLower);
 
   // ── Step 4: Category — known brands always override CC classification ──
   let category;
   if      (type === "credited") category = "income";
   else if (invBrand)            category = "investments";   // Groww/Zerodha always → investments
   else if (insureBrand)         category = "insurance";     // Tata AIA/LIC → insurance
+  else if (isFamilyTransfer)    category = "family";        // Transfers tagged as parents/family
   else if (brand)               category = "quickcart";    // Blinkit/Zomato always → quickcart
   else if (isCreditCard)        category = "creditcard";   // generic CC (no known brand)
   else                          category = "miscellaneous";
@@ -407,6 +415,8 @@ const D = {
   miscSoft:    "#e5e6f6",
   insure:      "#c45e1a",   // warm amber-orange for insurance
   insureSoft:  "#faeadf",
+  family:      "#7a5c99",   // warm purple for family
+  familySoft:  "#ede6f5",
   rLg:         24,
   rMd:         18,
   rSm:         12,
@@ -421,13 +431,14 @@ const CATS = {
   quick:   { name: "QuickCart",     emoji: "🛒", color: D.quick,   soft: D.quickSoft  },
   invest:  { name: "Investments",   emoji: "📈", color: D.invest,  soft: D.investSoft },
   insure:  { name: "Insurance",     emoji: "🛡️", color: D.insure,  soft: D.insureSoft },
+  family:  { name: "Family",        emoji: "🏠", color: D.family,  soft: D.familySoft },
   misc:    { name: "Miscellaneous", emoji: "🏷️", color: D.misc,    soft: D.miscSoft   },
 };
 
 // Internal category key → display key
 const CK = k => ({
   income:"income", creditcard:"cc", quickcart:"quick",
-  investments:"invest", insurance:"insure", miscellaneous:"misc"
+  investments:"invest", insurance:"insure", family:"family", miscellaneous:"misc"
 }[k] || "misc");
 
 // Indian number formatter (supports compact: 1.2L, 45k)
@@ -516,11 +527,15 @@ export default function App() {
   const [showDrill,    setShowDrill]    = useState(null);
   const [smsFeed,      setSmsFeed]      = useState(MOCK_SMS_FEED);
   const [onboarded,    setOnboarded]    = useState(false);
-  const [obStep,       setObStep]       = useState(0); // 0-2 carousel, 3 salary
+  const [obStep,       setObStep]       = useState(0); // 0-2 carousel, 3 salary, 4 fixed expenses
   const [salary,       setSalary]       = useState({ amount: "", day: 1 });
   const [salaryInput,  setSalaryInput]  = useState({ amount: "", day: "1" });
   const [obAmt,        setObAmt]        = useState("");
   const [obDay,        setObDay]        = useState("1");
+  // Fixed monthly expenses set during onboarding
+  const [fixedExpenses, setFixedExpenses] = useState({
+    sip: "", insurance: "", parents: "", rent: "",
+  });
 
   // ── Font injection ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -582,10 +597,26 @@ export default function App() {
     return { txns: passed, blockedCount: blocked };
   }, [smsFeed]);
 
-  const taggedTxns = useMemo(
-    () => txns.map(t => ({ ...t, tag: tagMap[t.id] || t.suggestedTag || null })),
-    [txns, tagMap]
-  );
+  // Cross-check SMS amounts against user's declared fixed expenses
+  // Marks transactions as "isFixed" so they don't show as surprise spending
+  const taggedTxns = useMemo(() => txns.map(t => {
+    const tag = tagMap[t.id] || t.suggestedTag || null;
+    let isFixed = false, fixedLabel = null;
+    if (t.type === "debited" && t.amount > 0) {
+      const amt = t.amount;
+      const tol = amt * 0.05; // 5% tolerance for partial amounts
+      if (fixedExpenses.sip && Math.abs(amt - Number(fixedExpenses.sip)) <= tol && t.category === "investments") {
+        isFixed = true; fixedLabel = "Fixed SIP";
+      } else if (fixedExpenses.insurance && Math.abs(amt - Number(fixedExpenses.insurance)) <= tol && t.category === "insurance") {
+        isFixed = true; fixedLabel = "Fixed Premium";
+      } else if (fixedExpenses.parents && Math.abs(amt - Number(fixedExpenses.parents)) <= tol && t.category === "family") {
+        isFixed = true; fixedLabel = "Fixed · Family";
+      } else if (fixedExpenses.rent && Math.abs(amt - Number(fixedExpenses.rent)) <= tol && (tag === "Rent" || t.suggestedTag === "Rent")) {
+        isFixed = true; fixedLabel = "Fixed · Rent";
+      }
+    }
+    return { ...t, tag, isFixed, fixedLabel };
+  }), [txns, tagMap, fixedExpenses]);
 
   // ── Salary injection ────────────────────────────────────────────────────
   const salaryTxns = useMemo(() => {
@@ -635,6 +666,7 @@ export default function App() {
   const totalQuick   = useMemo(() => periodTxns.filter(t => t.category === "quickcart").reduce((s,t) => s+t.amount, 0), [periodTxns]);
   const totalInv     = useMemo(() => periodTxns.filter(t => t.category === "investments").reduce((s,t) => s+t.amount, 0), [periodTxns]);
   const totalInsure  = useMemo(() => periodTxns.filter(t => t.category === "insurance").reduce((s,t) => s+t.amount, 0), [periodTxns]);
+  const totalFamily  = useMemo(() => periodTxns.filter(t => t.category === "family").reduce((s,t) => s+t.amount, 0), [periodTxns]);
   const totalMisc    = useMemo(() => periodTxns.filter(t => t.category === "miscellaneous").reduce((s,t) => s+t.amount, 0), [periodTxns]);
 
   const tagChartData = useMemo(() => {
@@ -650,7 +682,25 @@ export default function App() {
   }, [periodTxns]);
 
   // ── Actions ─────────────────────────────────────────────────────────────
-  const applyTag  = (id, tag) => { setTagMap(p => ({ ...p, [id]: tag })); setActiveTagTxn(null); setTagDraft(""); };
+  const applyTag = (id, tag) => {
+    // Find the brand of this transaction
+    const thisTxn = allTxns.find(t => t.id === id);
+    const brand = thisTxn?.brand;
+    setTagMap(p => {
+      const next = { ...p, [id]: tag };
+      // Propagate to all transactions with the same brand (if brand is known)
+      if (brand) {
+        allTxns.forEach(t => {
+          if (t.id !== id && t.brand === brand && t.type === "debited" && !p[t.id]) {
+            next[t.id] = tag; // only auto-fill if not already manually tagged
+          }
+        });
+      }
+      return next;
+    });
+    setActiveTagTxn(null);
+    setTagDraft("");
+  };
   const removeTag = id        => setTagMap(p => { const n={...p}; delete n[id]; return n; });
 
   const periodLabel = period === "D" ? "Today"
@@ -765,13 +815,92 @@ export default function App() {
                     setSalary({ amount: obAmt, day: Number(obDay)||1 });
                     setSalaryInput({ amount: obAmt, day: obDay });
                   }
-                  setOnboarded(true);
+                  setObStep(4); // → fixed expenses step
                 }}
                 style={{ flex:1, height:52, background:D.ink, color:D.cream, border:"none",
                   borderRadius:14, fontSize:15, fontWeight:700, cursor:"pointer", ...F }}>
-                {obAmt > 0 ? "Save & Start →" : "Skip for now →"}
+                Next →
               </button>
             </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Step 4: Fixed monthly expenses ──────────────────────────────────────
+    if (obStep === 4) {
+      const fields = [
+        { key:"sip",       label:"SIP / Investments",  hint:"Groww, Zerodha, Kuvera…",    emoji:"📈" },
+        { key:"insurance", label:"Insurance Premiums", hint:"Tata AIA, LIC, ICICI Pru…", emoji:"🛡️" },
+        { key:"parents",   label:"Parents / Family",   hint:"Monthly transfer to parents", emoji:"🏠" },
+        { key:"rent",      label:"Rent",               hint:"Monthly rent amount",         emoji:"🔑" },
+      ];
+      const total = Object.values(fixedExpenses).reduce((s,v) => s + (Number(v)||0), 0);
+      return (
+        <div style={{ height:"100vh", background:D.cream, display:"flex", flexDirection:"column", ...F }}>
+          <div style={{ padding:"52px 24px 20px" }}>
+            <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.12em", color:D.ink4, textTransform:"uppercase" }}>STEP 04</div>
+            <div style={{ fontSize:28, fontWeight:800, lineHeight:1.1, marginTop:8, color:D.ink, letterSpacing:"-0.02em" }}>
+              Your fixed expenses
+            </div>
+            <div style={{ fontSize:14, color:D.ink3, fontWeight:500, marginTop:10, lineHeight:1.5 }}>
+              These repeat every month. We'll flag when SMS amounts match — no manual entry needed.
+            </div>
+          </div>
+
+          <div style={{ flex:1, overflowY:"auto", padding:"0 24px" }}>
+            <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+              {fields.map(f => (
+                <div key={f.key} style={{ background:D.white, borderRadius:18, border:`1px solid ${D.line}`, padding:"14px 16px" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
+                    <span style={{ fontSize:18 }}>{f.emoji}</span>
+                    <div>
+                      <div style={{ fontSize:13, fontWeight:700, color:D.ink }}>{f.label}</div>
+                      <div style={{ fontSize:11, color:D.ink4 }}>{f.hint}</div>
+                    </div>
+                  </div>
+                  <div style={{ position:"relative" }}>
+                    <span style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)",
+                      fontSize:16, fontWeight:700, color:D.ink3 }}>₹</span>
+                    <input type="number" inputMode="numeric"
+                      value={fixedExpenses[f.key]}
+                      onChange={e => setFixedExpenses(p => ({...p, [f.key]: e.target.value}))}
+                      placeholder="0"
+                      style={{ width:"100%", height:48, paddingLeft:28, paddingRight:16,
+                        border:`1.5px solid ${D.line}`, borderRadius:12,
+                        background:D.cream2, fontSize:18, fontWeight:700, color:D.ink,
+                        outline:"none", ...F }}/>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {total > 0 && (
+              <div style={{ marginTop:14, padding:"14px 16px", background:D.incomeSoft, borderRadius:14 }}>
+                <div style={{ fontSize:12, color:D.ink3, fontWeight:600, marginBottom:4 }}>
+                  Fixed commitments / month
+                </div>
+                <div style={{ fontSize:22, fontWeight:800, color:D.ink }}>{fmt(total)}</div>
+                {obAmt && <div style={{ fontSize:12, color:D.income, marginTop:4 }}>
+                  {fmt(Number(obAmt) - total,true)} remaining after fixed expenses
+                </div>}
+              </div>
+            )}
+            <div style={{ height:20 }}/>
+          </div>
+
+          <div style={{ padding:"12px 24px 44px", display:"flex", gap:10 }}>
+            <button onClick={() => setOnboarded(true)}
+              style={{ height:52, padding:"0 22px", background:"transparent",
+                border:`1px solid ${D.line2}`, borderRadius:14, color:D.ink3,
+                fontSize:14, fontWeight:600, cursor:"pointer", ...F }}>
+              Skip
+            </button>
+            <button onClick={() => setOnboarded(true)}
+              style={{ flex:1, height:52, background:D.ink, color:D.cream, border:"none",
+                borderRadius:14, fontSize:15, fontWeight:700, cursor:"pointer", ...F }}>
+              {total > 0 ? "Save & start →" : "Skip for now →"}
+            </button>
           </div>
         </div>
       );
@@ -882,6 +1011,7 @@ export default function App() {
       { key:"misc",   internal:"miscellaneous", total:totalMisc   },
       { key:"invest", internal:"investments",   total:totalInv    },
       { key:"insure", internal:"insurance",     total:totalInsure },
+      { key:"family", internal:"family",        total:totalFamily },
       { key:"quick",  internal:"quickcart",     total:totalQuick  },
     ].filter(c => c.total > 0);
 
@@ -1193,7 +1323,7 @@ export default function App() {
       if (chipRowRef.current) chipRowRef.current.scrollLeft = 0;
     };
 
-    const CAT_FILTER_MAP = { income:"income", cc:"creditcard", quick:"quickcart", invest:"investments", insure:"insurance", misc:"miscellaneous" };
+    const CAT_FILTER_MAP = { income:"income", cc:"creditcard", quick:"quickcart", invest:"investments", insure:"insurance", family:"family", misc:"miscellaneous" };
 
     const filtered = useMemo(() => periodTxns.filter(t => {
       if (filter==="all") return true;
@@ -1225,7 +1355,8 @@ export default function App() {
       { key:"quick",  label:"Quick",     dot:D.quick   },
       { key:"invest", label:"Invest",    dot:D.invest  },
       { key:"insure", label:"Insurance", dot:D.insure  },
-      { key:"misc",   label:"Misc",      dot:D.misc    },
+      { key:"family", label:"Family",   dot:D.family  },
+      { key:"misc",   label:"Misc",     dot:D.misc    },
     ];
 
     return (
@@ -1309,10 +1440,15 @@ export default function App() {
                               ) : t.isSalary ? (
                                 <span style={{ fontSize:10, padding:"2px 6px", borderRadius:4,
                                   background:D.incomeSoft, color:D.income, fontWeight:700 }}>Salary</span>
+                              ) : t.isFixed ? (
+                                <span style={{ fontSize:10, padding:"2px 6px", borderRadius:4,
+                                  background:D.cream3, color:D.ink3, fontWeight:700, whiteSpace:"nowrap" }}>
+                                  ✓ {t.fixedLabel}
+                                </span>
                               ) : (
                                 <span style={{ fontSize:11, color:c.color, fontWeight:600, whiteSpace:"nowrap" }}>{c.name}</span>
                               )}
-                              {t.tag && <span style={{ fontSize:11, color:D.ink4, whiteSpace:"nowrap" }}>· #{t.tag}</span>}
+                              {t.tag && !t.isFixed && <span style={{ fontSize:11, color:D.ink4, whiteSpace:"nowrap" }}>· #{t.tag}</span>}
                             </div>
                           </div>
                           <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:4, flexShrink:0 }}>
