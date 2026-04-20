@@ -563,7 +563,7 @@ export default function App() {
   const [showSalary,   setShowSalary]   = useState(false);
   const [showDrill,    setShowDrill]    = useState(null);
   const [smsFeed,      setSmsFeed]      = useState(MOCK_SMS_FEED);
-  const [onboarded,    setOnboarded]    = useState(false);
+  const [onboarded,    setOnboarded]    = useState(() => localStorage.getItem("ob_done") === "1");
   const [obStep,       setObStep]       = useState(0); // 0-2 carousel, 3 salary, 4 fixed expenses
   const [salary,       setSalary]       = useState({ amount: "", day: 1 });
   const [salaryInput,  setSalaryInput]  = useState({ amount: "", day: "1" });
@@ -573,6 +573,9 @@ export default function App() {
   const [fixedExpenses, setFixedExpenses] = useState({
     sip: "", insurance: "", parents: "", rent: "",
   });
+
+  // ── Finish onboarding (persists so it never shows again) ───────────────
+  const finishOnboarding = () => { localStorage.setItem("ob_done","1"); setOnboarded(true); };
 
   // ── Font injection ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -792,24 +795,9 @@ export default function App() {
   // ══════════════════════════════════════════════════════════════════════
   //  ONBOARDING
   // ══════════════════════════════════════════════════════════════════════
-  const obSteps = [
-    {
-      n: "STEP 01", title: "We read your bank SMS",
-      body: "Nothing else. No banking login, no account linking, no cloud upload. Your inbox stays yours.",
-    },
-    {
-      n: "STEP 02", title: "Auto-sorted into 5 buckets",
-      body: "Swiggy goes to QuickCart. Zerodha to Investments. Credit-card payments separate themselves. Override anything, any time.",
-    },
-    {
-      n: "STEP 03", title: "Tag. Review. Done.",
-      body: "Add tags like #Food or #Rent. See where your money actually went — no spreadsheets, no manual entry.",
-    },
-  ];
-
   if (!onboarded) {
-    // Salary setup step
-    if (obStep === 3) {
+    // ── Step 1: Salary setup (obStep === 1) ─────────────────────────────────
+    if (obStep === 1) {
       return (
         <div style={{ maxWidth:430, margin:"0 auto", height:"100vh", background:D.cream, overflow:"hidden", ...F }}>
           <div style={{ height:"100%", display:"flex", flexDirection:"column" }}>
@@ -826,7 +814,6 @@ export default function App() {
             </div>
 
             <div style={{ padding:"28px 24px 0", display:"flex", flexDirection:"column", gap:16, flex:1 }}>
-              {/* Amount */}
               <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                 <label style={{ fontSize:11, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", color:D.ink3 }}>
                   Monthly salary
@@ -842,7 +829,6 @@ export default function App() {
                       outline:"none", ...F }}/>
                 </div>
               </div>
-              {/* Payday */}
               <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
                 <label style={{ fontSize:11, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", color:D.ink3 }}>
                   Payday — day of month
@@ -852,7 +838,6 @@ export default function App() {
                   style={{ height:52, padding:"0 16px", border:`1.5px solid ${D.line}`, borderRadius:14,
                     background:D.white, fontSize:17, fontWeight:600, color:D.ink, outline:"none", ...F }}/>
               </div>
-              {/* Preview */}
               {obAmt > 0 && (
                 <div style={{ padding:"14px 16px", background:D.incomeSoft, borderRadius:14 }}>
                   <div style={{ fontSize:13, color:D.ink, fontWeight:500 }}>
@@ -865,23 +850,22 @@ export default function App() {
               )}
             </div>
 
-            <div style={{ padding:"20px 24px 44px", display:"flex", gap:10 }}>
-              <button onClick={() => setOnboarded(true)}
-                style={{ height:52, padding:"0 22px", background:"transparent",
-                  border:`1px solid ${D.line2}`, borderRadius:14, color:D.ink3,
-                  fontSize:14, fontWeight:600, cursor:"pointer", ...F }}>
-                Skip
-              </button>
+            <div style={{ padding:"16px 24px 44px", display:"flex", flexDirection:"column", gap:10 }}>
               <button onClick={() => {
                   if (Number(obAmt) > 0) {
                     setSalary({ amount: obAmt, day: Number(obDay)||1 });
                     setSalaryInput({ amount: obAmt, day: obDay });
                   }
-                  setObStep(4); // → fixed expenses step
+                  setObStep(2);
                 }}
-                style={{ flex:1, height:52, background:D.ink, color:D.cream, border:"none",
+                style={{ width:"100%", height:54, background:D.ink, color:D.cream, border:"none",
                   borderRadius:14, fontSize:15, fontWeight:700, cursor:"pointer", ...F }}>
                 Next →
+              </button>
+              <button onClick={finishOnboarding}
+                style={{ width:"100%", height:44, background:"transparent", border:"none",
+                  color:D.ink3, fontSize:14, fontWeight:600, cursor:"pointer", ...F }}>
+                Add salary later
               </button>
             </div>
           </div>
@@ -889,8 +873,8 @@ export default function App() {
       );
     }
 
-    // ── Step 4: Fixed monthly expenses ──────────────────────────────────────
-    if (obStep === 4) {
+    // ── Step 2: Fixed monthly expenses ──────────────────────────────────────
+    if (obStep === 2) {
       const fields = [
         { key:"sip",       label:"SIP / Investments",  hint:"Groww, Zerodha, Kuvera…",    emoji:"📈" },
         { key:"insurance", label:"Insurance Premiums", hint:"Tata AIA, LIC, ICICI Pru…", emoji:"🛡️" },
@@ -901,7 +885,7 @@ export default function App() {
       return (
         <div style={{ height:"100vh", background:D.cream, display:"flex", flexDirection:"column", ...F }}>
           <div style={{ padding:"52px 24px 20px" }}>
-            <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.12em", color:D.ink4, textTransform:"uppercase" }}>STEP 04</div>
+            <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.12em", color:D.ink4, textTransform:"uppercase" }}>STEP 3 OF 3</div>
             <div style={{ fontSize:28, fontWeight:800, lineHeight:1.1, marginTop:8, color:D.ink, letterSpacing:"-0.02em" }}>
               Your fixed expenses
             </div>
@@ -951,104 +935,74 @@ export default function App() {
             <div style={{ height:20 }}/>
           </div>
 
-          <div style={{ padding:"12px 24px 44px", display:"flex", gap:10 }}>
-            <button onClick={() => setOnboarded(true)}
-              style={{ height:52, padding:"0 22px", background:"transparent",
-                border:`1px solid ${D.line2}`, borderRadius:14, color:D.ink3,
-                fontSize:14, fontWeight:600, cursor:"pointer", ...F }}>
-              Skip
-            </button>
-            <button onClick={() => setOnboarded(true)}
-              style={{ flex:1, height:52, background:D.ink, color:D.cream, border:"none",
+          <div style={{ padding:"12px 24px 44px", display:"flex", flexDirection:"column", gap:10 }}>
+            <button onClick={finishOnboarding}
+              style={{ width:"100%", height:54, background:D.ink, color:D.cream, border:"none",
                 borderRadius:14, fontSize:15, fontWeight:700, cursor:"pointer", ...F }}>
-              {total > 0 ? "Save & start →" : "Skip for now →"}
+              {total > 0 ? "Save & start →" : "Start →"}
+            </button>
+            <button onClick={finishOnboarding}
+              style={{ width:"100%", height:44, background:"transparent", border:"none",
+                color:D.ink3, fontSize:14, fontWeight:600, cursor:"pointer", ...F }}>
+              Skip for now
             </button>
           </div>
         </div>
       );
     }
 
-    // Info carousel steps 0-2
-    const s = obSteps[obStep];
+    // ── Step 0: Single intro screen ─────────────────────────────────────────
     return (
       <div style={{ maxWidth:430, margin:"0 auto", height:"100vh", background:D.cream, overflow:"hidden", ...F }}>
         <div style={{ height:"100%", display:"flex", flexDirection:"column" }}>
-          {/* Progress + skip */}
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"52px 24px 0" }}>
-            <div style={{ display:"flex", gap:6 }}>
-              {obSteps.map((_,i) => (
-                <div key={i} style={{
-                  width: i===obStep?24:6, height:6, borderRadius:3,
-                  background: i<=obStep ? D.ink : D.line2,
-                  transition:"all 300ms cubic-bezier(.2,.8,.2,1)",
-                }}/>
+          {/* Visual preview */}
+          <div style={{ flex:1, padding:"56px 24px 20px", display:"flex", flexDirection:"column", gap:12 }}>
+            <div style={{ background:D.white, borderRadius:18, padding:"16px 18px", border:`1px solid ${D.line}` }}>
+              <div style={{ fontSize:10, color:D.ink4, fontWeight:700, letterSpacing:"0.1em", marginBottom:6 }}>HDFCBK · 14:22</div>
+              <div style={{ fontSize:13, color:D.ink2, lineHeight:1.5 }}>
+                Spent <strong>Rs.486.00</strong> at SWIGGY on 18-Apr using your debit card ending 4417.
+              </div>
+            </div>
+            <div style={{ display:"flex", justifyContent:"flex-end" }}>
+              <div style={{ padding:"10px 16px", background:D.ink, borderRadius:14, display:"flex", alignItems:"center", gap:8 }}>
+                <span style={{ color:D.incomeSoft, fontSize:13, fontWeight:700 }}>✓</span>
+                <span style={{ color:D.cream, fontSize:13, fontWeight:600 }}>₹486 · QuickCart · #Food</span>
+              </div>
+            </div>
+
+            {/* 3 bullets */}
+            <div style={{ display:"flex", flexDirection:"column", gap:10, marginTop:8 }}>
+              {[
+                { emoji:"🔒", text:"Reads only ₹ amounts & brand names — nothing personal stored" },
+                { emoji:"📂", text:"Auto-sorts into Swiggy, Groww, Insurance & more" },
+                { emoji:"🏷️", text:"Tag once, auto-tags every similar transaction" },
+              ].map(({ emoji, text }) => (
+                <div key={text} style={{ display:"flex", alignItems:"flex-start", gap:12,
+                  padding:"13px 16px", background:D.white, borderRadius:16, border:`1px solid ${D.line}` }}>
+                  <span style={{ fontSize:18, lineHeight:1 }}>{emoji}</span>
+                  <span style={{ fontSize:13, fontWeight:500, color:D.ink2, lineHeight:1.45 }}>{text}</span>
+                </div>
               ))}
             </div>
-            <button onClick={() => setObStep(3)}
-              style={{ fontSize:13, fontWeight:600, color:D.ink3, background:"none", border:"none", cursor:"pointer" }}>
-              Skip
-            </button>
           </div>
 
-          {/* Visuals */}
-          <div style={{ flex:1, padding:"32px 24px 0" }}>
-            {obStep === 0 && (
-              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                <div style={{ background:D.white, borderRadius:18, padding:"18px", border:`1px solid ${D.line}` }}>
-                  <div style={{ fontSize:10, color:D.ink4, fontWeight:700, letterSpacing:"0.1em", marginBottom:6 }}>HDFCBK · 14:22</div>
-                  <div style={{ fontSize:13, color:D.ink2, lineHeight:1.5 }}>
-                    Spent <strong>Rs.486.00</strong> at SWIGGY on 18-Apr using your debit card ending 4417.
-                  </div>
-                </div>
-                <div style={{ display:"flex", alignItems:"center", justifyContent:"flex-end" }}>
-                  <div style={{ padding:"10px 16px", background:D.ink, borderRadius:14, display:"flex", alignItems:"center", gap:8 }}>
-                    <span style={{ color:D.incomeSoft, fontSize:13, fontWeight:700 }}>✓</span>
-                    <span style={{ color:D.cream, fontSize:13, fontWeight:600 }}>₹486 · QuickCart</span>
-                  </div>
-                </div>
-              </div>
-            )}
-            {obStep === 1 && (
-              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-                {["cc","quick","invest","misc"].map((k,i) => {
-                  const c = CATS[k];
-                  const amts = {cc:"₹12.4k",quick:"₹9.6k",invest:"₹22.5k",misc:"₹34.2k"};
-                  return (
-                    <div key={k} style={{ display:"flex", alignItems:"center", gap:14,
-                      padding:"13px 16px", background:D.white, borderRadius:16, border:`1px solid ${D.line}` }}>
-                      <div style={{ width:38, height:38, borderRadius:11, background:c.soft,
-                        display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 }}>{c.emoji}</div>
-                      <div style={{ flex:1, fontSize:14, fontWeight:600, color:D.ink }}>{c.name}</div>
-                      <div style={{ fontSize:16, fontWeight:700, color:D.ink }}>{amts[k]}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-            {obStep === 2 && (
-              <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
-                {["Food","Groceries","Rent","SIP","Bills","Fuel","Transit","Subscriptions","Health"].map(t => (
-                  <span key={t} style={{ padding:"8px 14px", borderRadius:999,
-                    background:D.white, border:`1px solid ${D.line}`,
-                    fontSize:13, fontWeight:600, color:D.ink2 }}>#{t}</span>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Copy */}
-          <div style={{ padding:"24px 24px 0" }}>
-            <div style={{ fontSize:11, fontWeight:700, letterSpacing:"0.12em", color:D.ink4, textTransform:"uppercase" }}>{s.n}</div>
-            <div style={{ fontSize:30, fontWeight:800, lineHeight:1.1, marginTop:8, color:D.ink, letterSpacing:"-0.02em" }}>{s.title}</div>
-            <div style={{ fontSize:15, color:D.ink3, fontWeight:500, marginTop:10, lineHeight:1.55 }}>{s.body}</div>
-          </div>
-
-          {/* CTA */}
-          <div style={{ padding:"22px 24px 44px" }}>
-            <button onClick={() => obStep < 2 ? setObStep(obStep+1) : setObStep(3)}
+          {/* Title + CTA at thumb level */}
+          <div style={{ padding:"0 24px 44px" }}>
+            <div style={{ fontSize:28, fontWeight:800, lineHeight:1.1, color:D.ink, letterSpacing:"-0.02em", marginBottom:6 }}>
+              Your money,<br/>finally clear.
+            </div>
+            <div style={{ fontSize:14, color:D.ink3, fontWeight:500, marginBottom:20, lineHeight:1.5 }}>
+              SMS Budget Tracker reads your bank messages locally — no logins, no cloud.
+            </div>
+            <button onClick={() => setObStep(1)}
               style={{ width:"100%", height:54, background:D.ink, color:D.cream, border:"none",
                 borderRadius:14, fontSize:15, fontWeight:700, cursor:"pointer", ...F }}>
-              {obStep < 2 ? "Continue →" : "Let's go →"}
+              Get started →
+            </button>
+            <button onClick={finishOnboarding}
+              style={{ width:"100%", height:44, background:"transparent", border:"none",
+                color:D.ink3, fontSize:14, fontWeight:600, cursor:"pointer", marginTop:6, ...F }}>
+              Skip setup
             </button>
           </div>
         </div>
@@ -1594,7 +1548,9 @@ export default function App() {
   // ══════════════════════════════════════════════════════════════════════
 
   // Salary
-  const SalaryModal = () => (
+  // SalaryModal is inlined at the render site (not a sub-component) to prevent
+  // unmount-on-rerender when the user types — a React pitfall with inner arrow components.
+  const salarySheetJSX = (
     <Sheet open={showSalary} onClose={()=>setShowSalary(false)} title="Salary Setup 💰">
       <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
         <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
@@ -1672,9 +1628,14 @@ export default function App() {
     </Sheet>
   );
 
-  // Privacy
+  // Privacy + App Update
+  // Replace GITHUB_REPO below with your actual repo, e.g. "yourname/budget-tracker"
+  const GITHUB_REPO = "YOUR_GITHUB_USERNAME/budget-tracker-app";
+  const RELEASES_URL = `https://github.com/${GITHUB_REPO}/releases/latest`;
+
   const PrivacyModal = () => (
     <Sheet open={showPrivacy} onClose={()=>setShowPrivacy(false)} title="Privacy & Security">
+      {/* Privacy card */}
       <div style={{ display:"flex", alignItems:"center", gap:12, padding:16,
         background:D.white, border:`1px solid ${D.line}`, borderRadius:14, marginBottom:16 }}>
         <div style={{ width:44, height:44, borderRadius:14, background:D.incomeSoft,
@@ -1685,11 +1646,13 @@ export default function App() {
         </div>
       </div>
       {[
-        { ok:true,  t:"Read bank & merchant SMS to find spends" },
-        { ok:true,  t:"Parse amount, merchant, category locally" },
-        { ok:false, t:"Upload messages anywhere" },
-        { ok:false, t:"Read personal conversations" },
+        { ok:true,  t:"Reads only ₹ amounts & brand names from bank SMS" },
+        { ok:true,  t:"All processing local — never leaves your phone" },
+        { ok:true,  t:"One font loaded from Google Fonts CDN (no personal data)" },
+        { ok:false, t:"Upload messages or data anywhere" },
+        { ok:false, t:"Read personal conversations or OTPs" },
         { ok:false, t:"Access contacts, photos, or location" },
+        { ok:false, t:"Store account numbers, card numbers, or PINs" },
       ].map((r,i) => (
         <div key={i} style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 0",
           borderBottom:`1px solid ${D.line}` }}>
@@ -1700,6 +1663,27 @@ export default function App() {
           <div style={{ fontSize:13, color: r.ok?D.ink:D.ink3, fontWeight:500 }}>{r.t}</div>
         </div>
       ))}
+
+      {/* App update section */}
+      <div style={{ marginTop:20, padding:"16px", background:D.white,
+        border:`1px solid ${D.line}`, borderRadius:14 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
+          <span style={{ fontSize:20 }}>📲</span>
+          <div>
+            <div style={{ fontSize:14, fontWeight:700, color:D.ink }}>App updates</div>
+            <div style={{ fontSize:11, color:D.ink3, marginTop:1 }}>Download & install over the existing app</div>
+          </div>
+        </div>
+        <a href={RELEASES_URL} target="_blank" rel="noreferrer"
+          style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+            height:46, background:D.ink, color:D.cream, borderRadius:12, border:"none",
+            fontSize:14, fontWeight:700, textDecoration:"none", cursor:"pointer" }}>
+          ⬇ Download latest APK
+        </a>
+        <div style={{ fontSize:11, color:D.ink4, marginTop:8, lineHeight:1.5 }}>
+          Same signing key every build — Android will update in-place, no uninstall needed.
+        </div>
+      </div>
     </Sheet>
   );
 
@@ -1783,7 +1767,7 @@ export default function App() {
         })}
       </div>
 
-      {showSalary  && <SalaryModal/>}
+      {salarySheetJSX}
       {showTagMgr  && <TagManagerModal/>}
       {showPrivacy && <PrivacyModal/>}
       {showDrill   && <DrillModal/>}
