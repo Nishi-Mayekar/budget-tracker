@@ -72,10 +72,12 @@ function isTransactionMessage(raw, senderAddress) {
   if (!raw || typeof raw !== "string") return false;
   // Block personal SMS senders (phone numbers)
   if (isPersonalSender(senderAddress)) return false;
-  // Must contain a currency amount
-  if (!(/(?:INR|₹|Rs\.?)\s*[\d,]+/.test(raw))) return false;
+  // Must contain a currency amount — with OR without prefix (SBIUPI sends "debited by 500.00")
+  const hasCurrencyPrefix = /(?:INR|₹|Rs\.?)\s*[\d,]+/.test(raw);
+  const hasAmountAfterVerb = /\b(?:debited|credited|paid|transferred|received|charged)\s+(?:by|for|of|to|from)?\s*(?:INR|₹|Rs\.?)?\s*[\d,]+(?:\.\d{1,2})?/i.test(raw);
+  if (!hasCurrencyPrefix && !hasAmountAfterVerb) return false;
   // Must contain at least one transaction verb
-  if (!(/\b(credited|debited|spent|charged|used\s+for|purchase[d]?|transaction|transfer(?:red)?|deducted|debit|paid)\b/i.test(raw))) return false;
+  if (!(/\b(credited|debited|spent|charged|used\s+for|purchase[d]?|transaction|transfer(?:red)?|deducted|debit|paid|received|successful(?:ly)?)\b/i.test(raw))) return false;
   // Drop if any blocked pattern matches
   return !BLOCKED_PATTERNS.some(p => p.test(raw));
 }
@@ -267,16 +269,39 @@ function secureExtract(raw) {
     .replace(/[\w.\-]+@[\w.\-]+/g, "[UPI]");                                  // UPI VPA
 
   // ── Step 3: Extract amount from scrubbed ──
-  const amtMatch = scrubbed.match(/(?:INR|₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)/i);
+  // Try currency-prefixed first (₹/Rs./INR), then verb-adjacent (SBIUPI: "debited by 500.00")
+  let amtMatch = scrubbed.match(/(?:INR|₹|Rs\.?)\s*([\d,]+(?:\.\d{1,2})?)/i);
+  if (!amtMatch) {
+    amtMatch = scrubbed.match(/\b(?:debited|credited|paid|received|charged|transferred)\s+(?:by|for|of|to|from)?\s*([\d,]+(?:\.\d{1,2})?)/i);
+  }
   if (!amtMatch) return null;
   const amount = Math.round(parseFloat(amtMatch[1].replace(/,/g, "")) * 100) / 100;
   if (!isFinite(amount) || amount <= 0 || amount > 10000000) return null;
 
-  const isCredit    = /\bcredited\b/i.test(scrubbed);
+  // Credit detection: "credited", "received", "added to your account", "money received"
+  const isCredit    = /\b(credited|received|added\s+to\s+(?:your\s+)?(?:a(?:ccount|\/c))|money\s+received|amount\s+received)\b/i.test(scrubbed);
+  const isDebit     = /\b(debited|spent|charged|paid|deducted|transferred\s+(?:to|from\s+your))\b/i.test(scrubbed);
   const isRefund    = /\b(refund|reversal|cashback|cash\s*back|reversed|returned)\b/i.test(scrubbed);
-  const type        = (isCredit || isRefund) ? "credited" : "debited";
+  // If only "paid" appears without "received", it's a debit (you paid = money went out)
+  const type        = (isCredit && !isDebit) || isRefund ? "credited" : "debited";
   const isRefundTxn = isRefund;
-  const isCreditCard = /credit[\s\-]?card|cc\s+(ending|no|limit|card)|credit\s*a\/c|\bscapia\b/i.test(scrubbed);
+  // Detect which card — shown as brand in transactions ("HDFC CC", "SBI Card", "Scapia")
+  const CC_PATTERNS = [
+    { regex: /\bscapia\b/i,                                       label: "Scapia"   },
+    { regex: /\bhdfc\b.*(?:credit\s*card|cc\b|card)/i,            label: "HDFC CC"  },
+    { regex: /\bsbi\b.*(?:credit\s*card|cc\b|card)/i,             label: "SBI Card" },
+    { regex: /\bicici\b.*(?:credit\s*card|cc\b|card)/i,           label: "ICICI CC" },
+    { regex: /\baxis\b.*(?:credit\s*card|cc\b|card)/i,            label: "Axis CC"  },
+    { regex: /\bkotak\b.*(?:credit\s*card|cc\b|card)/i,           label: "Kotak CC" },
+    { regex: /\byes\s*bank\b.*(?:credit\s*card|cc\b|card)/i,      label: "Yes CC"   },
+    { regex: /\bau\s*bank\b.*(?:credit\s*card|cc\b|card)/i,       label: "AU CC"    },
+    { regex: /credit[\s\-]?card|cc\s+(ending|no|limit|card)|credit\s*a\/c/i, label: null },
+  ];
+  let detectedCard = null;
+  for (const { regex, label } of CC_PATTERNS) {
+    if (regex.test(scrubbed)) { detectedCard = label; break; }
+  }
+  const isCreditCard = !!detectedCard;
 
   // Family transfer detection — narration contains family keywords
   const narrationLower = (raw.match(/(?:info|remarks?|note|upi\/\d+\/[^\/]+\/)([^\n,\.@]{3,40})/i)||[])[1]?.toLowerCase() || "";
@@ -292,7 +317,7 @@ function secureExtract(raw) {
   else if (isCreditCard)        category = "creditcard";   // generic CC (no known brand)
   else                          category = "miscellaneous";
 
-  const finalBrand = brand || invBrand || insureBrand;
+  const finalBrand = brand || invBrand || insureBrand || (isCreditCard ? detectedCard : null);
   return { amount, type, category, brand: finalBrand, isCreditCard, isRefund: isRefundTxn };
 }
 
@@ -365,11 +390,15 @@ const MOCK_SMS_FEED = [
   { id: 32, raw: "₹4,200 debited from Ac xx5678. Info: UPI/876543219/travel/irctc@okaxis. Avl Bal:₹4,000",    date: "Apr 08", bank: "HDFC" },
   { id: 33, raw: "₹800 debited from Ac xx5678. Info: UPI/765432198/medical/apollo@okicici. Avl Bal:₹3,200",   date: "Apr 10", bank: "SBI"  },
   { id: 34, raw: "₹1,100 debited from Ac xx5678 Remarks: rent payment Apr. UPI Ref:654321987",                date: "Apr 01", bank: "ICICI"},
-  { id: 21, raw: "Rs.3,500.00 debited from your HDFC Credit Card ending 1234 at IndiGo. Apr 08",   date: "Apr 08", bank: "HDFC"  },
-  { id: 22, raw: "₹850 spent on SBI Credit Card XX5678 at Swiggy on 12-Apr-26",                    date: "Apr 12", bank: "SBI"   },
-  { id: 23, raw: "Alert: Transaction of ₹1,200 on your Axis Bank Credit Card ending 9012 at Amazon", date: "Apr 11", bank: "Axis"  },
-  { id: 24, raw: "Rs.450.00 charged on ICICI Bank Credit Card XX3456 at Zomato. Apr 10",            date: "Apr 10", bank: "ICICI" },
-  { id: 25, raw: "Your Kotak Credit Card has been used for Rs.6,200 at Apple Store. Apr 09",        date: "Apr 09", bank: "Kotak" },
+  // HDFC CC
+  { id: 21, raw: "Rs.3,500.00 debited from your HDFC Credit Card ending 1234 at IndiGo. Apr 08",   date: "Apr 08", bank: "HDFCCC" },
+  { id: 22, raw: "₹1,200 spent on HDFC Bank Credit Card XX1234 at Blinkit on 12-Apr-26",           date: "Apr 12", bank: "HDFCCC" },
+  // SBI CC
+  { id: 23, raw: "₹850 spent on SBI Credit Card XX5678 at Zomato on 12-Apr-26",                    date: "Apr 12", bank: "SBICRD" },
+  { id: 24, raw: "Rs.450.00 charged on SBI Card XX5678 at Swiggy. Apr 10",                         date: "Apr 10", bank: "SBICRD" },
+  // Scapia CC
+  { id: 25, raw: "₹2,100 spent on your Scapia Card at Amazon. Apr 09",                             date: "Apr 09", bank: "SCAPIA" },
+  { id: 26, raw: "Scapia: Rs.642.00 debited at Zepto on 14-Apr-26",                                date: "Apr 14", bank: "SCAPIA" },
   { id: 41, raw: "₹5,000 debited from Ac xx5678. Info: Groww Mutual Fund SIP Apr",        date: "Apr 03", bank: "HDFC"  },
   { id: 42, raw: "₹2,500 debited from Ac xx5678. Info: Zerodha Broking Charges",          date: "Apr 07", bank: "ICICI" },
   { id: 43, raw: "₹10,000 debited from Ac xx5678. Info: Groww - Nifty 50 Index Fund SIP", date: "Apr 01", bank: "SBI"   },
@@ -383,6 +412,14 @@ const MOCK_SMS_FEED = [
   { id: 45, raw: "₹850 refund credited to Ac xx5678 for Swiggy Order #7892",              date: "Apr 15", bank: "HDFC"  },
   { id: 46, raw: "₹200 cashback credited to Ac xx5678 from Axis Bank Credit Card",        date: "Apr 13", bank: "Axis"  },
   { id: 47, raw: "₹1,200 reversal credited to Ac xx5678 for Amazon return",               date: "Apr 11", bank: "HDFC"  },
+  // SBIUPI format — no ₹ prefix, "debited by 500.00"
+  { id: 61, raw: "Dear UPI user A/C X1234 debited by 642.00 on date 17-04-26 trf to Zomato Ref 987654321. If not done by you call 18001111",  date: "Apr 17", bank: "SBIUPI" },
+  { id: 62, raw: "Dear UPI user A/C X1234 debited by 15000.00 on date 05-04-26 trf to parents monthly Ref 111222333.", date: "Apr 05", bank: "SBIUPI" },
+  // PhonePe format
+  { id: 63, raw: "₹384 paid to Zepto via PhonePe UPI. Ref 445566778. Apr 16", date: "Apr 16", bank: "PHONPE" },
+  { id: 64, raw: "₹800 received from RAHUL via PhonePe UPI. Ref 556677889.", date: "Apr 14", bank: "PHONPE" },
+  // CRED format
+  { id: 65, raw: "₹1299 paid via CRED UPI to Amazon. CRED Ref CRED20260412.", date: "Apr 12", bank: "CREDSG" },
   // BLOCKED — OTP messages
   { id: 101, raw: "748392 is your OTP for HDFC NetBanking. Do not share with anyone.", date: "Apr 14", bank: "HDFC"  },
   { id: 102, raw: "Your ICICI Bank OTP is 291047. Valid for 10 minutes.",              date: "Apr 13", bank: "ICICI" },
@@ -554,14 +591,39 @@ export default function App() {
     document.head.appendChild(style);
   }, []);
 
+  // ── Date parser: extract date from SMS body text as fallback ────────────
+  function parseDateFromBody(body) {
+    // dd-mm-yy or dd-mm-yyyy (SBIUPI, many banks)
+    let m = body.match(/\b(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})\b/);
+    if (m) {
+      const day = parseInt(m[1]), mon = parseInt(m[2]);
+      const yr  = m[3].length === 2 ? 2000 + parseInt(m[3]) : parseInt(m[3]);
+      if (mon >= 1 && mon <= 12 && day >= 1 && day <= 31)
+        return new Date(yr, mon - 1, day);
+    }
+    // "20-Apr-26" or "20-Apr-2026"
+    m = body.match(/\b(\d{1,2})[-\s]([A-Za-z]{3})[-\s](\d{2,4})\b/);
+    if (m) {
+      const day = parseInt(m[1]);
+      const mon = MONTH_NAMES.indexOf(m[2].charAt(0).toUpperCase() + m[2].slice(1).toLowerCase());
+      const yr  = m[3].length === 2 ? 2000 + parseInt(m[3]) : parseInt(m[3]);
+      if (mon >= 0 && day >= 1 && day <= 31)
+        return new Date(yr, mon, day);
+    }
+    return null;
+  }
+
   // ── Load real SMS ───────────────────────────────────────────────────────
   useEffect(() => {
     SmsNative.getMessages()
       .then(({ messages }) => {
         const feed = messages.map((m, i) => {
-          const d = new Date(Number(m.date));
+          const ts = Number(m.date);
+          // Use timestamp if valid (> year 2020), otherwise extract from body
+          let d = ts > 1577836800000 ? new Date(ts) : parseDateFromBody(m.body || "");
+          if (!d || isNaN(d.getTime())) d = new Date(); // final fallback: today
           return {
-            id: i, raw: m.body, timestamp: Number(m.date),
+            id: i, raw: m.body, timestamp: ts > 0 ? ts : d.getTime(),
             date: `${MONTH_NAMES[d.getMonth()]} ${String(d.getDate()).padStart(2,"0")}`,
             bank: m.address,
           };
