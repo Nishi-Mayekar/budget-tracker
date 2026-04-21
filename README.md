@@ -41,6 +41,6 @@ The only outbound request the app makes is loading the Inter Tight font from Goo
 
 ## Made by
 
-**Nmay** · [nishimayekar.design@gmail.com](mailto:nishimayekar.design@gmail.com)
+**Nmay** · nishimayekar
 
 Personal project · Not affiliated with any bank or payment service
